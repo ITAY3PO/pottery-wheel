@@ -46,6 +46,7 @@ export class Studio {
   private releaseAngle = 0;
   private lift = 0;
   private readonly contact: Mesh;
+  private readonly toolContacts = new Map<string, Mesh>();
   private readonly wire: Mesh;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -88,6 +89,11 @@ export class Studio {
     );
     this.contact.visible = false;
     this.scene.add(this.contact);
+    for (const mesh of throwingContacts()) {
+      mesh.visible = false;
+      this.toolContacts.set(mesh.name, mesh);
+      this.scene.add(mesh);
+    }
 
     this.wire = new Mesh(
       new CylinderGeometry(0.00055, 0.00055, 1, 6),
@@ -166,10 +172,23 @@ export class Studio {
   }
 
   showContact(visible: boolean, x: number, y: number, pressure: number): void {
-    this.contact.visible = visible;
+    this.contact.visible = false;
+    for (const mesh of this.toolContacts.values()) mesh.visible = false;
     if (!visible) return;
-    this.contact.position.set(x, Math.max(0, y), 0.014);
-    this.contact.scale.setScalar(0.75 + pressure * 1.15);
+    // The sheet already marks the active chip. Reading it here keeps a
+    // distinct contact marker without a per-tool branch in the frame loop.
+    const id = activeToolId();
+    const mesh = this.toolContacts.get(id) ?? this.contact;
+    mesh.visible = true;
+    const yPos = Math.max(0, y);
+    mesh.position.set(x, yPos, id === 'water' ? 0.018 : 0.014);
+    const pressed = 0.75 + Math.max(0, Math.min(1, pressure)) * 1.15;
+    const dir = x >= 0 ? 1 : -1;
+    if (id === 'needle') mesh.scale.setScalar(1);
+    else if (id === 'knife') mesh.scale.set(dir, 0.85 + pressure * 0.35, 0.85 + pressure * 0.35);
+    else if (id === 'rib') mesh.scale.set(dir, 1, 1);
+    else if (id === 'sponge') mesh.scale.setScalar(1.05 + pressure * 0.4);
+    else mesh.scale.setScalar(pressed);
   }
 
   showWire(visible: boolean, y: number, width: number): void {
@@ -250,6 +269,59 @@ export class Studio {
     }
     this.attachmentMeshes.clear();
   }
+}
+
+function activeToolId(): string {
+  if (typeof document === 'undefined') return '';
+  return document.querySelector<HTMLElement>('.tool[aria-pressed="true"]')?.dataset.tool ?? '';
+}
+
+/** Contact markers for the throwing tools. Names match `data-tool` on the sheet. */
+function throwingContacts(): Mesh[] {
+  const ribGeo = new TorusGeometry(0.012, 0.0016, 5, 16, Math.PI * 0.92);
+  ribGeo.rotateZ(Math.PI * 0.62);
+  const rib = new Mesh(
+    ribGeo,
+    new MeshStandardMaterial({ color: 0xd5d8de, metalness: 0.86, roughness: 0.24 }),
+  );
+  rib.name = 'rib';
+
+  const sponge = new Mesh(
+    new SphereGeometry(0.009, 10, 8),
+    new MeshStandardMaterial({ color: 0xe4b45a, roughness: 0.96, metalness: 0 }),
+  );
+  sponge.name = 'sponge';
+
+  const water = new Mesh(
+    new SphereGeometry(0.0052, 10, 8),
+    new MeshStandardMaterial({
+      color: 0x8ec8e4,
+      roughness: 0.12,
+      metalness: 0.04,
+      transparent: true,
+      opacity: 0.78,
+      depthWrite: false,
+    }),
+  );
+  water.name = 'water';
+
+  const needleGeo = new CylinderGeometry(0.0004, 0.00012, 0.032, 5);
+  needleGeo.translate(0, 0.016, 0);
+  const needle = new Mesh(
+    needleGeo,
+    new MeshStandardMaterial({ color: 0xd7dade, metalness: 0.9, roughness: 0.2 }),
+  );
+  needle.name = 'needle';
+
+  const knifeGeo = new CylinderGeometry(0.0011, 0.0062, 0.02, 3);
+  knifeGeo.rotateZ(Math.PI / 2);
+  const knife = new Mesh(
+    knifeGeo,
+    new MeshStandardMaterial({ color: 0xc4a36a, roughness: 0.72, metalness: 0 }),
+  );
+  knife.name = 'knife';
+
+  return [rib, sponge, water, needle, knife];
 }
 
 function attachmentSignature(attachment: Attachment): string {
