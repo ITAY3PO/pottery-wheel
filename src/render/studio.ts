@@ -1,0 +1,378 @@
+import {
+  ACESFilmicToneMapping,
+  BackSide,
+  CanvasTexture,
+  Color,
+  CylinderGeometry,
+  DirectionalLight,
+  DoubleSide,
+  Group,
+  LatheGeometry,
+  Mesh,
+  MeshBasicMaterial,
+  MeshPhysicalMaterial,
+  MeshStandardMaterial,
+  PMREMGenerator,
+  RepeatWrapping,
+  Scene,
+  SphereGeometry,
+  SRGBColorSpace,
+  TorusGeometry,
+  Vector2,
+  WebGLRenderer,
+} from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { getClay } from '../clay/clays';
+import { maxOuterAtRing, pieceHeight } from '../clay/grid';
+import type { Attachment, MeshSurface, PieceState } from '../core/types';
+import { buildAttachmentGeometry } from './attachmentMesh';
+import { CameraRig } from './cameraRig';
+import { ClayMesh } from './clayMesh';
+import { applyClayFinish } from './materials';
+import { createSurfaceTextures, type SurfaceTextures } from './surfaceTextures';
+
+export class Studio {
+  readonly renderer: WebGLRenderer;
+  readonly scene = new Scene();
+  readonly rig = new CameraRig();
+  readonly clayPivot = new Group();
+  readonly wheelPivot = new Group();
+  private clayMesh: ClayMesh | null = null;
+  private readonly attachmentRoot = new Group();
+  private readonly attachmentMeshes = new Map<string, Mesh>();
+  private readonly surfaceCache = new Map<string, SurfaceTextures>();
+  private finishStage = '';
+  private finishClay = '';
+  private releaseAngle = 0;
+  private lift = 0;
+  private readonly contact: Mesh;
+  private readonly wire: Mesh;
+
+  constructor(canvas: HTMLCanvasElement) {
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    this.renderer = new WebGLRenderer({
+      canvas,
+      // DPR 2 already samples finely. MSAA on top of that blows the fill rate
+      // on a mid-range phone, which is the machine this has to hold 60fps on.
+      antialias: pixelRatio < 1.5,
+      alpha: false,
+      powerPreference: 'high-performance',
+      failIfMajorPerformanceCaveat: false,
+    });
+    this.renderer.outputColorSpace = SRGBColorSpace;
+    this.renderer.toneMapping = ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.12;
+    this.renderer.setClearColor(new Color('#3a2e28'), 1);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+
+    const pmrem = new PMREMGenerator(this.renderer);
+    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    pmrem.dispose();
+
+    const key = new DirectionalLight(0xfff0dc, 3.4);
+    key.position.set(-0.85, 1.25, 0.62);
+    this.scene.add(key);
+
+    this.scene.add(buildCove());
+    this.scene.add(buildTable());
+    this.scene.add(buildPan());
+    this.scene.add(this.wheelPivot);
+    buildWheelHead(this.wheelPivot);
+
+    this.clayPivot.add(this.attachmentRoot);
+    this.scene.add(this.clayPivot);
+
+    this.contact = new Mesh(
+      new SphereGeometry(0.006, 16, 12),
+      new MeshStandardMaterial({ color: 0xfff4e8, roughness: 0.35, metalness: 0 }),
+    );
+    this.contact.visible = false;
+    this.scene.add(this.contact);
+
+    this.wire = new Mesh(
+      new CylinderGeometry(0.00055, 0.00055, 1, 6),
+      new MeshStandardMaterial({ color: 0xd7dadf, metalness: 0.88, roughness: 0.22 }),
+    );
+    this.wire.rotation.z = Math.PI / 2;
+    this.wire.visible = false;
+    this.scene.add(this.wire);
+  }
+
+  setSize(width: number, height: number, sheetHeight: number): void {
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setSize(width, height, true);
+    this.rig.resize(width, height, sheetHeight);
+  }
+
+  syncPiece(piece: PieceState | null): void {
+    if (!piece) {
+      if (this.clayMesh) {
+        this.clayPivot.remove(this.clayMesh.mesh);
+        this.clayMesh.geometry.dispose();
+        this.clayMesh = null;
+      }
+      this.clearAttachments();
+      this.rig.frameWheel();
+      return;
+    }
+    if (
+      !this.clayMesh ||
+      this.clayMesh.rings !== piece.grid.rings ||
+      this.clayMesh.segments !== piece.grid.segments
+    ) {
+      if (this.clayMesh) {
+        this.clayPivot.remove(this.clayMesh.mesh);
+        this.clayMesh.geometry.dispose();
+      }
+      this.clayMesh = new ClayMesh(piece.grid.rings, piece.grid.segments);
+      this.clayPivot.add(this.clayMesh.mesh);
+      this.finishStage = '';
+    }
+    this.clayMesh.update(piece.grid);
+    if (this.finishStage !== piece.stage || this.finishClay !== piece.clayTypeId) {
+      const material = this.clayMesh.mesh.material;
+      if (material instanceof MeshPhysicalMaterial) {
+        applyClayFinish(material, getClay(piece.clayTypeId), piece.stage);
+      }
+      this.finishStage = piece.stage;
+      this.finishClay = piece.clayTypeId;
+    }
+    this.syncSurfaces(piece);
+    this.syncAttachments(piece);
+    const height = pieceHeight(piece.grid);
+    let radius = 0.04;
+    for (let ring = 0; ring < piece.grid.rings; ring += 4) {
+      radius = Math.max(radius, maxOuterAtRing(piece.grid, ring));
+    }
+    this.rig.framePiece(height, radius);
+  }
+
+  spin(angle: number, onWheel: boolean, dt: number): void {
+    this.wheelPivot.rotation.y = angle;
+    if (onWheel) {
+      this.clayPivot.rotation.y = angle;
+      this.releaseAngle = angle;
+      this.lift = 0;
+    } else {
+      this.clayPivot.rotation.y = this.releaseAngle;
+      this.lift += (0.014 - this.lift) * Math.min(1, dt * 6);
+    }
+    this.clayPivot.position.y = this.lift;
+  }
+
+  /** Keep the empty wheel turning gently on the setup screen. */
+  idleSpin(angle: number): void {
+    this.wheelPivot.rotation.y = angle;
+  }
+
+  showContact(visible: boolean, x: number, y: number, pressure: number): void {
+    this.contact.visible = visible;
+    if (!visible) return;
+    this.contact.position.set(x, Math.max(0, y), 0.014);
+    this.contact.scale.setScalar(0.75 + pressure * 1.15);
+  }
+
+  showWire(visible: boolean, y: number, width: number): void {
+    this.wire.visible = visible;
+    if (!visible) return;
+    this.wire.position.set(0, Math.max(0.002, y), 0.012);
+    this.wire.scale.set(1, Math.max(0.06, width), 1);
+  }
+
+  bodyObjects(): Mesh[] {
+    const meshes: Mesh[] = [];
+    if (this.clayMesh) meshes.push(this.clayMesh.mesh);
+    for (const mesh of this.attachmentMeshes.values()) meshes.push(mesh);
+    return meshes;
+  }
+
+  render(dt: number): void {
+    this.rig.update(dt);
+    this.renderer.render(this.scene, this.rig.camera);
+  }
+
+  private syncSurfaces(piece: PieceState): void {
+    if (!this.clayMesh) return;
+    const body = piece.surfaces.find((surface) => surface.meshId === 'body');
+    if (body) this.ensureTextures(this.clayMesh.mesh, body);
+  }
+
+  private ensureTextures(mesh: Mesh, surface: MeshSurface): void {
+    let textures = this.surfaceCache.get(surface.meshId);
+    if (!textures) {
+      textures = createSurfaceTextures(surface.map);
+      this.surfaceCache.set(surface.meshId, textures);
+    }
+    mesh.userData.surfaceTextures = textures;
+    mesh.userData.meshId = surface.meshId;
+  }
+
+  private syncAttachments(piece: PieceState): void {
+    const live = new Set(piece.attachments.map((attachment) => attachment.id));
+    for (const [id, mesh] of this.attachmentMeshes) {
+      if (live.has(id)) continue;
+      this.attachmentRoot.remove(mesh);
+      mesh.geometry.dispose();
+      this.attachmentMeshes.delete(id);
+      const cached = this.surfaceCache.get(id);
+      cached?.glazeId.dispose();
+      cached?.thickness.dispose();
+      cached?.wax.dispose();
+      cached?.underglaze.dispose();
+      this.surfaceCache.delete(id);
+    }
+    const clayMaterial = this.clayMesh?.mesh.material;
+    for (const attachment of piece.attachments) {
+      const signature = attachmentSignature(attachment);
+      let mesh = this.attachmentMeshes.get(attachment.id);
+      if (!mesh || mesh.userData.signature !== signature) {
+        if (mesh) {
+          this.attachmentRoot.remove(mesh);
+          mesh.geometry.dispose();
+        }
+        const material =
+          clayMaterial instanceof MeshPhysicalMaterial ? clayMaterial : new MeshPhysicalMaterial({ color: 0x7a5644 });
+        mesh = new Mesh(buildAttachmentGeometry(attachment), material);
+        mesh.userData.signature = signature;
+        mesh.userData.meshId = attachment.id;
+        this.attachmentRoot.add(mesh);
+        this.attachmentMeshes.set(attachment.id, mesh);
+      }
+      const surface = piece.surfaces.find((entry) => entry.meshId === attachment.id);
+      if (surface && mesh) this.ensureTextures(mesh, surface);
+    }
+  }
+
+  private clearAttachments(): void {
+    for (const mesh of this.attachmentMeshes.values()) {
+      this.attachmentRoot.remove(mesh);
+      mesh.geometry.dispose();
+    }
+    this.attachmentMeshes.clear();
+  }
+}
+
+function attachmentSignature(attachment: Attachment): string {
+  const points = attachment.points
+    .map((point) => `${point.x.toFixed(4)},${point.y.toFixed(4)},${point.z.toFixed(4)},${point.radius.toFixed(4)}`)
+    .join(';');
+  return `${attachment.kind}|${attachment.joinBlend}|${attachment.tubularSegments}|${points}`;
+}
+
+function buildCove(): Mesh {
+  // Unlit. A lit sphere behind the camera shades every pixel with the PBR
+  // stack, and the phone never sees a shadow there anyway.
+  return new Mesh(
+    new SphereGeometry(3.4, 24, 16),
+    new MeshBasicMaterial({ color: 0x6a5344, side: BackSide }),
+  );
+}
+
+function buildTable(): Mesh {
+  const mesh = new Mesh(
+    new CylinderGeometry(0.78, 0.78, 0.05, 48),
+    new MeshStandardMaterial({ map: woodTexture('#7a4e32', '#5c3924'), color: 0xffffff, roughness: 0.86, metalness: 0 }),
+  );
+  mesh.position.y = -0.085;
+  return mesh;
+}
+
+function buildPan(): Mesh {
+  const points = [
+    new Vector2(0.03, -0.055),
+    new Vector2(0.15, -0.058),
+    new Vector2(0.188, -0.03),
+    new Vector2(0.206, 0.008),
+    new Vector2(0.218, 0.03),
+    new Vector2(0.206, 0.044),
+    new Vector2(0.192, 0.02),
+    new Vector2(0.178, -0.02),
+    new Vector2(0.16, -0.046),
+    new Vector2(0.04, -0.048),
+  ];
+  return new Mesh(
+    new LatheGeometry(points, 64),
+    new MeshPhysicalMaterial({
+      color: 0xead7c4,
+      roughness: 0.38,
+      metalness: 0.02,
+      clearcoat: 0.45,
+      clearcoatRoughness: 0.28,
+      side: DoubleSide,
+    }),
+  );
+}
+
+function buildWheelHead(pivot: Group): void {
+  const head = new Mesh(
+    new CylinderGeometry(0.146, 0.146, 0.02, 64),
+    new MeshStandardMaterial({ color: 0x8d939a, metalness: 0.92, roughness: 0.34 }),
+  );
+  head.position.y = -0.02;
+  pivot.add(head);
+
+  const bat = new Mesh(
+    new CylinderGeometry(0.122, 0.122, 0.009, 48),
+    new MeshStandardMaterial({
+      map: woodTexture('#d2b48a', '#b8926a'),
+      color: 0xffffff,
+      roughness: 0.72,
+      metalness: 0,
+    }),
+  );
+  bat.position.y = -0.0045;
+  pivot.add(bat);
+
+  for (const radius of [0.045, 0.078, 0.11]) {
+    const groove = new Mesh(
+      new TorusGeometry(radius, 0.0014, 8, 48),
+      new MeshStandardMaterial({ color: 0x2f3338, metalness: 0.7, roughness: 0.42 }),
+    );
+    groove.rotation.x = Math.PI / 2;
+    groove.position.y = -0.0096;
+    pivot.add(groove);
+  }
+
+  const nut = new Mesh(
+    new CylinderGeometry(0.012, 0.012, 0.006, 20),
+    new MeshStandardMaterial({ color: 0x4e545a, metalness: 0.8, roughness: 0.35 }),
+  );
+  nut.position.y = -0.003;
+  pivot.add(nut);
+
+  const shaft = new Mesh(
+    new CylinderGeometry(0.018, 0.022, 0.06, 20),
+    new MeshStandardMaterial({ color: 0x6a7076, metalness: 0.85, roughness: 0.38 }),
+  );
+  shaft.position.y = -0.055;
+  pivot.add(shaft);
+}
+
+function woodTexture(light: string, dark: string): CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    const fallback = new CanvasTexture(canvas);
+    return fallback;
+  }
+  ctx.fillStyle = light;
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 28; i++) {
+    const y = (i / 28) * 256 + Math.sin(i * 1.7) * 2;
+    ctx.strokeStyle = dark;
+    ctx.globalAlpha = 0.18 + (i % 4) * 0.05;
+    ctx.lineWidth = 1 + (i % 3);
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.bezierCurveTo(80, y + 6, 160, y - 5, 256, y + 2);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  const texture = new CanvasTexture(canvas);
+  texture.wrapS = RepeatWrapping;
+  texture.wrapT = RepeatWrapping;
+  texture.colorSpace = SRGBColorSpace;
+  return texture;
+}
