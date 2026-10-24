@@ -18,7 +18,7 @@ import { ViewBar } from './ui/views';
 import { Wheel } from './core/wheel';
 import { installAudio } from './audio';
 import { bindFiringApp } from './firing/kiln';
-import { refreshGlazeLook } from './firing/look';
+import { bindGlazeFrame } from './firing/look';
 import { bindSurfaceDirty } from './surface/dirty';
 import { bindPainter } from './surface/session';
 
@@ -174,6 +174,7 @@ bindFiringApp({
     afterChange();
   },
 });
+bindGlazeFrame();
 requestAnimationFrame(frame);
 
 canvas.addEventListener('contextmenu', (event) => event.preventDefault());
@@ -233,10 +234,10 @@ function frame(now: number): void {
     if (integrity.slumped) toast('The clay slumped — too wet, and too tall.');
   }
   studio.syncPiece(piece);
-  refreshGlazeLook(piece);
   studio.spin(wheel.angle, piece.onWheel, elapsed);
   updateCursor();
   studio.showTrimChips(chips);
+  events.emit('frame', { dt: elapsed, piece });
   studio.render(elapsed);
 
   saveTimer += elapsed;
@@ -252,7 +253,6 @@ function frame(now: number): void {
     shell.render(model());
     onboarding.sync(piece);
   }
-  events.emit('frame', { dt: elapsed, piece });
   requestAnimationFrame(frame);
 }
 
@@ -546,7 +546,6 @@ function afterChange(): void {
   if (!available.some((tool) => tool.id === activeToolId)) activeToolId = available[0]?.id ?? null;
   confirmDiscard = false;
   studio.syncPiece(piece);
-  refreshGlazeLook(piece);
   savePiece(piece);
   publish();
 }

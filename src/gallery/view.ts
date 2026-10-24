@@ -20,8 +20,24 @@ import { pieceHeight } from '../clay/grid';
 import type { PieceState } from '../core/types';
 import { buildAttachmentGeometry } from '../render/attachmentMesh';
 import { ClayMesh } from '../render/clayMesh';
-import { applyClayFinish, createClayMaterial } from '../render/materials';
+import { applyFiredLook } from '../firing/look';
+import { applyClayFinish, bindSurfaceUniforms, createClayMaterial } from '../render/materials';
 import { createSurfaceTextures, type SurfaceTextures } from '../render/surfaceTextures';
+
+/**
+ * Glaze and wax on the gallery's own materials. The shelf and the read-only
+ * shared view both render through `Turntable.show`, which calls this.
+ * One handle material is shared, so the fired look is applied once; each
+ * attachment still binds its own surface map.
+ */
+export function applyTurntableMaterials(
+  body: MeshPhysicalMaterial,
+  handle: MeshPhysicalMaterial,
+  piece: PieceState,
+): void {
+  applyFiredLook(body, piece, 'body');
+  applyFiredLook(handle, piece, piece.attachments[0]?.id ?? 'attachment');
+}
 
 /** A spinning view of one pot, on its own canvas, so the wheel underneath can stay put. */
 export class Turntable {
@@ -113,6 +129,7 @@ export class Turntable {
     this.handleMaterial = createClayMaterial();
     applyClayFinish(this.handleMaterial, clay, piece.stage);
     this.handleMaterial.vertexColors = false;
+    applyTurntableMaterials(this.clayMaterial, this.handleMaterial, piece);
 
     const mesh = new ClayMesh(piece.grid.rings, piece.grid.segments);
     const previous = mesh.mesh.material;
@@ -185,6 +202,7 @@ export class Turntable {
     this.textures.push(textures);
     mesh.userData.surfaceTextures = textures;
     mesh.userData.meshId = surface.meshId;
+    bindSurfaceUniforms(mesh);
   }
 
   private frameCamera(): void {

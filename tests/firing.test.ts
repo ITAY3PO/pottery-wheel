@@ -92,6 +92,7 @@ describe('kiln outcomes', () => {
     expect(torn).toBeGreaterThan(piece.grid.torn.length * 0.1);
     expect(torn).toBeLessThan(piece.grid.torn.length * 0.2);
     expect(lastFiringNote).toMatch(/cracked/i);
+    expect(lastFiringNote).toMatch(/start a new piece/i);
   });
 
   it('slumps earthenware at cone 6 and leaves stoneware and porcelain standing', () => {

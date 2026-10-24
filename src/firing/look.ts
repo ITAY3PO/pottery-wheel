@@ -1,20 +1,35 @@
 import { DataTexture, FloatType, NearestFilter, NoColorSpace, RGBAFormat, SRGBColorSpace, UnsignedByteType, type MeshPhysicalMaterial } from 'three';
+import { events } from '../core/events';
+import type { PieceState, StageId } from '../core/types';
 import { addClayShaderHook, clayMaterialsSharingHooks, clayRootMaterial, type ClayShader } from '../render/materials';
-import type { PieceState } from '../core/types';
 import { GLAZES } from '../surface/catalog';
 
 const PALETTE = 16;
-const shaders = new Set<ClayShader>();
+/** Studio shaders. A gallery turntable pins its own fire value and stays out of this set. */
+const studioShaders = new Set<ClayShader>();
+const pinnedFire = new WeakMap<ClayShader, number>();
+const hookedMaterials = new WeakSet<MeshPhysicalMaterial>();
+const materialShaders = new WeakMap<MeshPhysicalMaterial, Set<ClayShader>>();
 let hooked = false;
 let currentFire = -1;
 let warned = false;
+let frameBound = false;
 
 const colorTex = buildColorPalette();
 const paramsTex = buildParamsPalette();
 
+/** Sample the wheel piece on each frame, after `syncPiece` and before the draw. */
+export function bindGlazeFrame(): void {
+  if (frameBound) return;
+  frameBound = true;
+  events.on('frame', ({ piece }) => {
+    refreshGlazeLook(piece);
+  });
+}
+
 /**
- * Fired look on the existing MeshPhysicalMaterial.
- * Call after `syncPiece`, which applies the stage finish first.
+ * Fired look on the studio MeshPhysicalMaterial.
+ * Runs after `syncPiece`, which applies the stage finish first.
  * Samples the core uniforms (`uSurfaceGlaze`, `uSurfaceThickness`, `uSurfaceWax`).
  * Thickness is a nearest float. Byte channels are 0..1, so wax and glaze ids
  * are decoded with * 255. If an id is set and the thickness sample is ~0
@@ -30,12 +45,61 @@ export function refreshGlazeLook(piece: PieceState | null): void {
     addClayShaderHook(material, glazeHook, 'glaze-fire');
     hooked = true;
   }
-  currentFire = stage === 'glaze-fired' ? 1 : active ? 0 : -1;
-  for (const shader of shaders) {
+  currentFire = fireForStage(stage);
+  for (const shader of studioShaders) {
+    if (pinnedFire.has(shader)) continue;
     const slot = shader.uniforms.uPwFire;
     if (slot) slot.value = currentFire;
   }
   if (stage === 'bisque' || stage === 'glazed') applyRawFinish(material);
+}
+
+/**
+ * Fired or chalky glaze on a material that is not the studio body.
+ * Gallery shelf turntables and the shared view each build their own materials.
+ * `meshId` records which surface this material stands for. The samplers still
+ * come from that mesh's `userData.surfaceTextures` at draw time.
+ * A pinned fire value is not overwritten when the wheel piece changes stage.
+ */
+export function applyFiredLook(material: MeshPhysicalMaterial, piece: PieceState, meshId: string): void {
+  const fire = fireForStage(piece.stage);
+  material.userData.pwFire = fire;
+  material.userData.pwFiredMeshId = meshId;
+  if (!hookedMaterials.has(material)) {
+    hookedMaterials.add(material);
+    addClayShaderHook(
+      material,
+      (shader) => {
+        glazeHook(shader);
+        let set = materialShaders.get(material);
+        if (!set) {
+          set = new Set();
+          materialShaders.set(material, set);
+        }
+        set.add(shader);
+        pinShader(shader, Number(material.userData.pwFire));
+      },
+      'glaze-fire',
+    );
+  } else {
+    const set = materialShaders.get(material);
+    if (set) for (const shader of set) pinShader(shader, fire);
+  }
+  if (piece.stage === 'bisque' || piece.stage === 'glazed') applyRawFinish(material);
+}
+
+function fireForStage(stage: StageId): number {
+  if (stage === 'glaze-fired') return 1;
+  if (stage === 'bisque' || stage === 'glazed') return 0;
+  return -1;
+}
+
+function pinShader(shader: ClayShader, fire: number): void {
+  studioShaders.delete(shader);
+  pinnedFire.set(shader, fire);
+  const slot = shader.uniforms.uPwFire;
+  if (slot) slot.value = fire;
+  else shader.uniforms.uPwFire = { value: fire };
 }
 
 function applyRawFinish(material: MeshPhysicalMaterial): void {
@@ -49,7 +113,7 @@ function applyRawFinish(material: MeshPhysicalMaterial): void {
 }
 
 function glazeHook(shader: ClayShader): void {
-  shaders.add(shader);
+  studioShaders.add(shader);
   shader.uniforms.uPwColor = { value: colorTex };
   shader.uniforms.uPwParams = { value: paramsTex };
   shader.uniforms.uPwFire = { value: currentFire };

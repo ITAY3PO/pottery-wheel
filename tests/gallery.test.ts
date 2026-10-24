@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
+import { createAttachment } from '../src/core/attachment';
 import { createSurfaceMap } from '../src/core/surfaceMap';
 import { createPiece, deserializePiece, serializePiece } from '../src/core/piece';
 import type { PieceState, StageContext } from '../src/core/types';
 import { bindGallery } from '../src/gallery/actions';
+import { Turntable, applyTurntableMaterials } from '../src/gallery/view';
 import {
   deleteGalleryPiece,
   listGallery,
   loadGalleryPiece,
   saveGalleryPiece,
 } from '../src/gallery/store';
+import { createClayMaterial } from '../src/render/materials';
 import { stage as glazeFired } from '../src/stages/glazeFired';
 
 function memoryStorage(): Storage {
@@ -168,6 +171,41 @@ describe('gallery storage', () => {
       save: () => undefined,
       share: () => undefined,
     });
+  });
+
+  it('applies the fired look to the pot and the attachment on a turntable', () => {
+    const piece = createPiece('stoneware', 1);
+    piece.stage = 'glaze-fired';
+    piece.attachments.push(
+      createAttachment({
+        id: 'gallery-handle',
+        kind: 'handle',
+        points: [
+          { x: 0.04, y: 0.02, z: 0, radius: 0.008 },
+          { x: 0.07, y: 0.06, z: 0.01, radius: 0.007 },
+          { x: 0.04, y: 0.1, z: 0, radius: 0.008 },
+        ],
+      }),
+    );
+    const body = createClayMaterial();
+    const handle = createClayMaterial();
+    applyTurntableMaterials(body, handle, piece);
+    expect(String(body.userData.hookKey)).toContain('glaze-fire');
+    expect(String(handle.userData.hookKey)).toContain('glaze-fire');
+    expect(body.userData.pwFire).toBe(1);
+    expect(handle.userData.pwFire).toBe(1);
+    expect(body.userData.pwFiredMeshId).toBe('body');
+    expect(handle.userData.pwFiredMeshId).toBe('gallery-handle');
+    applyTurntableMaterials(body, handle, piece);
+    expect(String(body.userData.hookKey)).toBe('clay|glaze-fire');
+
+    const bisque = createPiece('porcelain', 0.8);
+    bisque.stage = 'bisque';
+    const raw = createClayMaterial();
+    applyTurntableMaterials(raw, createClayMaterial(), bisque);
+    expect(raw.userData.pwFire).toBe(0);
+    expect(raw.roughness).toBeCloseTo(0.96);
+    expect(Turntable.prototype.show.toString()).toContain('applyTurntableMaterials');
   });
 
   it('reports unavailable storage instead of throwing', () => {

@@ -44,7 +44,7 @@ export function planFiring(piece: PieceState, tempC: number, to: 'bisque' | 'gla
 
 export function describeFiring(plan: FiringPlan): string {
   if (plan.moisture === 'exploded') return 'Still wet. The piece exploded in the kiln.';
-  if (plan.moisture === 'cracked') return 'Too damp for the kiln. It cracked.';
+  if (plan.moisture === 'cracked') return 'Too damp for the kiln. It cracked. Start a new piece.';
   if (plan.heat === 'slumped') return 'Too hot for this clay. It slumped.';
   if (plan.lostIds.length > 0) return 'A join that was not scored and slipped cracked off.';
   return '';

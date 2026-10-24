@@ -1,12 +1,19 @@
-import { GLAZES, getGlaze } from './catalog';
+import { GLAZES } from './catalog';
 import { painter, publishPainter } from './session';
 
 let mounted = false;
 
+const BRUSH_STEPS = [
+  { id: 'small', label: 'S', name: 'Small', size: 0.16 },
+  { id: 'medium', label: 'M', name: 'Medium', size: 0.5 },
+  { id: 'large', label: 'L', name: 'Large', size: 0.84 },
+] as const;
+
 /**
- * Swatches, wax, and brush size live in the sheet. Dip, pour, and
- * "coat is done" stay stage actions. The shell rebuilds `.sheet` from
- * HTML, so the dock is reinserted in front of `.actions`.
+ * One compact row — wax, glaze swatches, and a three-step brush — placed
+ * after Dip, Pour, and Coat is done. The shell rebuilds `.sheet` from HTML,
+ * so the row is put back after `.actions`. Those actions stay first in the
+ * sheet and sticky, so they remain on screen while the row can scroll.
  */
 export function mountPainter(): void {
   if (mounted || typeof document === 'undefined') return;
@@ -21,16 +28,18 @@ export function mountPainter(): void {
     document.head.append(style);
   }
 
+  const sizes = BRUSH_STEPS.map(
+    (step) =>
+      `<button class="painter-size" type="button" data-size="${step.id}" aria-label="${step.name} brush">${step.label}</button>`,
+  ).join('');
   const dock = document.createElement('div');
   dock.className = 'painter';
   dock.innerHTML = `
     <div class="painter-row">
       <button class="painter-wax" type="button" data-wax aria-pressed="false">Wax</button>
       <div class="painter-swatches" role="listbox" aria-label="Glazes"></div>
+      <div class="painter-sizes" role="group" aria-label="Brush size">${sizes}</div>
     </div>
-    <p class="painter-caption"></p>
-    <div class="field"><span>Brush</span><b data-size-word>Medium</b></div>
-    <input type="range" min="0" max="1" step="0.01" value="${painter.brushSize}" aria-label="Brush size" />
   `;
 
   const swatchRow = dock.querySelector('.painter-swatches') as HTMLElement;
@@ -57,12 +66,14 @@ export function mountPainter(): void {
     publishPainter();
   });
 
-  const size = dock.querySelector('input[type="range"]') as HTMLInputElement;
-  const word = dock.querySelector('[data-size-word]') as HTMLElement;
-  size.addEventListener('input', () => {
-    painter.brushSize = Number(size.value);
-    word.textContent = sizeWord(painter.brushSize);
-    ringSize();
+  dock.querySelectorAll<HTMLButtonElement>('.painter-size').forEach((button) => {
+    button.addEventListener('click', () => {
+      const step = BRUSH_STEPS.find((entry) => entry.id === button.dataset.size);
+      if (!step) return;
+      painter.brushSize = step.size;
+      sync(dock);
+      ringSize();
+    });
   });
 
   const ring = document.createElement('div');
@@ -108,12 +119,12 @@ export function mountPainter(): void {
 
   const place = () => {
     // The gallery overlay has its own sheet. The potter's sheet is the one
-    // directly under #app, and dip / pour live in its action row.
+    // directly under #app. Dip, pour, and coat stay in front of this row.
     const sheet = root.querySelector(':scope > .sheet-chrome > .sheet');
     const actions = sheet?.querySelector(':scope > .actions');
     if (!sheet || !actions) return;
-    if (dock.parentElement === sheet && dock.nextElementSibling === actions) return;
-    sheet.insertBefore(dock, actions);
+    if (dock.parentElement === sheet && dock.previousElementSibling === actions) return;
+    actions.after(dock);
     window.dispatchEvent(new Event('resize'));
   };
   const observer = new MutationObserver(place);
@@ -129,27 +140,41 @@ function sync(dock: HTMLElement): void {
     const on = painter.mode === 'glaze' && Number(button.dataset.id) === painter.glazeId;
     button.setAttribute('aria-pressed', on ? 'true' : 'false');
   });
-  const caption = dock.querySelector('.painter-caption');
-  if (caption) caption.textContent = painter.mode === 'wax' ? 'Wax resist' : getGlaze(painter.glazeId).name;
-  const word = dock.querySelector('[data-size-word]');
-  if (word) word.textContent = sizeWord(painter.brushSize);
+  const step = brushStep(painter.brushSize);
+  dock.querySelectorAll<HTMLButtonElement>('.painter-size').forEach((button) => {
+    button.setAttribute('aria-pressed', button.dataset.size === step ? 'true' : 'false');
+  });
 }
 
-function sizeWord(size: number): string {
-  if (size < 0.34) return 'Small';
-  if (size < 0.67) return 'Medium';
-  return 'Large';
+function brushStep(size: number): string {
+  if (size < 0.34) return 'small';
+  if (size < 0.67) return 'medium';
+  return 'large';
 }
 
 const PAINTER_CSS = `
+#app[data-stage="bisque"] > .sheet-chrome > .sheet {
+  display: flex;
+  flex-direction: column;
+}
+#app[data-stage="bisque"] > .sheet-chrome > .sheet > .actions {
+  order: -1;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex-shrink: 0;
+  margin: 0 0 8px;
+  padding-bottom: 8px;
+  background: var(--paper);
+}
 .painter { display: none; margin: 0 0 8px; }
 #app[data-stage="bisque"] .painter { display: block; }
-.painter-row { display: flex; gap: 8px; align-items: center; }
+.painter-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .painter-wax {
   flex: 0 0 auto;
-  min-width: 64px;
+  min-width: 56px;
   min-height: 44px;
-  padding: 0 14px;
+  padding: 0 12px;
   border-radius: 999px;
   border: 1.5px solid var(--line);
   background: #f4efe4;
@@ -165,7 +190,8 @@ const PAINTER_CSS = `
   display: flex;
   gap: 8px;
   overflow-x: auto;
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 2px 0;
   scrollbar-width: none;
   touch-action: pan-x;
@@ -181,7 +207,22 @@ const PAINTER_CSS = `
   box-shadow: inset 0 -8px 10px rgba(0, 0, 0, 0.16), inset 0 4px 6px rgba(255, 255, 255, 0.35);
 }
 .painter-swatch[aria-pressed="true"] { border-color: var(--ink); }
-.painter-caption { margin: 6px 0 0; color: var(--muted); font-size: 13px; min-height: 1.2em; }
+.painter-sizes { display: flex; gap: 4px; flex: 0 0 auto; }
+.painter-size {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1.5px solid var(--line);
+  background: transparent;
+  font: inherit;
+  font-weight: 640;
+}
+.painter-size[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
 .brush-ring {
   position: fixed;
   z-index: 5;
