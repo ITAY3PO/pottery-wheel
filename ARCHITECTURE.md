@@ -194,6 +194,8 @@ stop();
 
 `ctx.events` is this bus. Drying and trimming do not emit `wire-cut`; only `removeFromWheel` does.
 
+Wheel audio (`installAudio`) still reads speed and finger pressure from the wheel. Its poll subscribes here — `frame` for the sample, `stroke-start` / `stroke-end` for the splash latch, `stage-change` so drying is not a cut, and `wire-cut` for the cut — and does not schedule its own animation frame.
+
 `ToolPointer`:
 
 - `radius`, `height` — meters, profile plane through the wheel axis (side view).

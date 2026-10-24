@@ -2,12 +2,14 @@ import type { ToolContext } from '../core/types';
 import { PIECE_LIFT, pointOnOuter, radiusFor, type Vec3 } from './spline';
 
 /**
- * Placement reads the core tool hit fields when they are on `ToolContext`:
- * - `surfaceHit` — `{ meshId, u, v, point?, normal? }`. `point` and `normal`
- *   are world space. Body `u` is angle and `v` is profile arc.
- * - `ray` — a Three.js `Ray` (`origin`, `direction`) or a `Raycaster` (`ray`).
+ * Placement reads the core tool hit fields on `ToolContext`:
+ * - `surfaceHit` — `{ meshId, u, v, point, normal }`. `point` and `normal`
+ *   are piece-local (Y up, origin at the bat). Body `u` is angle and `v` is
+ *   profile arc. A missing hit still draws from the pointer.
+ * - `raycaster` — camera ray through the pointer. `ray` is accepted too, as a
+ *   Three.js `Ray` (`origin`, `direction`) or a `Raycaster` (`ray`).
  * - `markSurfaceDirty(meshId)` — refresh that mesh's surface textures.
- * Until those fields arrive, a handle still draws in the side-view profile plane.
+ * The drawing ray is world space. The surface hit is already piece-local.
  */
 export interface HandHit {
   meshId: string;
@@ -27,7 +29,7 @@ export interface Sample {
   air: Vec3;
   /** Piece-local point on the outer wall when the finger hit the body. */
   body: Vec3 | null;
-  /** Piece-local surface hit, when `surfaceHit.point` was in world space. */
+  /** Piece-local surface hit from `surfaceHit.point`. */
   contact: Vec3 | null;
   meshId: string | null;
   /** Piece-local face normal when the hit carried one. */
@@ -37,7 +39,9 @@ export interface Sample {
 
 interface HitContext {
   surfaceHit?: unknown;
+  /** Older alias. The live field is `raycaster`. */
   ray?: unknown;
+  raycaster?: unknown;
 }
 
 export function readHit(value: unknown): HandHit | null {
@@ -116,7 +120,7 @@ export function pieceLift(onWheel: boolean): number {
 export function placeSample(ctx: ToolContext): Sample | null {
   const extra = ctx as ToolContext & HitContext;
   const hit = readHit(extra.surfaceHit);
-  const ray = readRay(extra.ray);
+  const ray = readRay(extra.ray) ?? readRay(extra.raycaster);
   const lift = pieceLift(ctx.piece.onWheel);
   const rotation = ctx.wheel.angle;
   const tube = radiusFor('handle', ctx.pointer.pressure);
@@ -124,8 +128,10 @@ export function placeSample(ctx: ToolContext): Sample | null {
   const airWorld = plane ?? { x: ctx.pointer.x, y: ctx.pointer.y + lift, z: 0 };
   const air = worldToPiece(airWorld, rotation, lift);
   const body = hit?.meshId === 'body' ? pointOnOuter(ctx.piece.grid, hit.u, hit.v, tube) : null;
-  const contact = hit?.point ? worldToPiece(hit.point, rotation, lift) : null;
-  const normal = hit?.normal ? directionToPiece(hit.normal, rotation) : null;
+  // `raycastToUV` already returns piece-local copies. Rotating them again
+  // would swing a handle off the wall it just hit.
+  const contact = hit?.point ? { ...hit.point } : null;
+  const normal = hit?.normal ? { ...hit.normal } : null;
   if (!Number.isFinite(air.x) || !Number.isFinite(air.y) || !Number.isFinite(air.z)) return null;
   return {
     air,

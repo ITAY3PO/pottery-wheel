@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { installAudio, muteControl } from '../src/audio/bind';
+import { events } from '../src/core/events';
 import {
   MUTE_STORAGE_KEY,
   createAudio,
@@ -390,6 +391,52 @@ describe('wheel wiring', () => {
     live.binding.tick();
     expect(live.events.filter((event) => event === 'play:splash')).toHaveLength(1);
     expect(live.events.at(-1)).toBe('contact:0:0');
+  });
+
+  it('samples on the frame event and plays a wire cut once', () => {
+    const live = follow();
+    const piece = live.piece();
+    if (!piece) throw new Error('expected a piece');
+    live.binding.start();
+    try {
+      live.wheel.omega = live.wheel.maxOmega;
+      events.emit('frame', { dt: 0.016, piece });
+      expect(live.events.at(-2)).toBe('wheel:1');
+
+      piece.onWheel = false;
+      events.emit('wire-cut', { piece });
+      events.emit('frame', { dt: 0.016, piece });
+      expect(live.events.filter((event) => event === 'play:wire')).toHaveLength(1);
+
+      piece.stage = 'leather-hard';
+      events.emit('stage-change', { piece, from: 'wet', to: 'leather-hard' });
+      events.emit('frame', { dt: 0.016, piece });
+      expect(live.events.filter((event) => event === 'play:wire')).toHaveLength(1);
+    } finally {
+      live.binding.stop();
+    }
+  });
+
+  it('splashes again on the next stroke without waiting for the pointer to lift', () => {
+    const live = follow();
+    const piece = live.piece();
+    if (!piece) throw new Error('expected a piece');
+    live.setTool(() => 'water');
+    piece.grid.moisture.fill(0.9);
+    live.setPointer({ pressure: 0.8, height: piece.grid.y[8] ?? 0 });
+    live.binding.start();
+    try {
+      events.emit('stroke-start', { piece, toolId: 'water' });
+      events.emit('frame', { dt: 0.016, piece });
+      events.emit('frame', { dt: 0.016, piece });
+      expect(live.events.filter((event) => event === 'play:splash')).toHaveLength(1);
+      events.emit('stroke-end', { piece, toolId: 'water' });
+      events.emit('stroke-start', { piece, toolId: 'water' });
+      events.emit('frame', { dt: 0.016, piece });
+      expect(live.events.filter((event) => event === 'play:splash')).toHaveLength(2);
+    } finally {
+      live.binding.stop();
+    }
   });
 
   it('names the mute control from the saved preference', () => {
