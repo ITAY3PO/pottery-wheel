@@ -45,9 +45,17 @@ export interface ShellHandlers {
   onAction: (id: string) => void;
   onDiscard: () => void;
   onConfirmDiscard: () => void;
+  onHelp: () => void;
 }
 
 export class Shell {
+  readonly chrome: HTMLElement;
+  /** Help and the audio mute control. Mute keeps the id `#pw-mute`. */
+  readonly topbar: HTMLElement;
+  /** Journey stepper. Outside the sheet body so a rebuild cannot wipe it. */
+  readonly stepperSlot: HTMLElement;
+  /** Contextual tip. Outside the sheet body for the same reason. */
+  readonly tipSlot: HTMLElement;
   private readonly subtitle: HTMLElement;
   private readonly sheet: HTMLElement;
   private signature = '';
@@ -64,11 +72,35 @@ export class Shell {
     const wordmark = document.createElement('header');
     wordmark.className = 'wordmark';
     wordmark.innerHTML = '<h1>The Wheel</h1><p></p>';
+    const help = document.createElement('button');
+    help.type = 'button';
+    help.className = 'help';
+    help.textContent = 'Help';
+    help.setAttribute('aria-controls', 'throwing-tutorial');
+    help.setAttribute('aria-expanded', 'false');
+    help.addEventListener('click', () => this.handlers.onHelp());
+    const topbar = document.createElement('div');
+    topbar.className = 'topbar';
+    topbar.append(help);
+    const chrome = document.createElement('div');
+    chrome.className = 'sheet-chrome';
+    const stepper = document.createElement('div');
+    stepper.className = 'stepper-slot';
     const sheet = document.createElement('section');
     sheet.className = 'sheet';
-    root.append(wordmark, sheet);
+    const tip = document.createElement('div');
+    tip.className = 'tip-slot';
+    tip.hidden = true;
+    // Stepper, tutorial, and tip stay outside the nodes renderSetup / renderPiece
+    // replace. In-place patches of the sheet body must keep working.
+    chrome.append(stepper, sheet, tip);
+    root.append(wordmark, topbar, chrome);
     this.subtitle = wordmark.querySelector('p') as HTMLElement;
+    this.topbar = topbar;
+    this.chrome = chrome;
+    this.stepperSlot = stepper;
     this.sheet = sheet;
+    this.tipSlot = tip;
   }
 
   get sheetHeight(): number {
@@ -77,6 +109,14 @@ export class Shell {
 
   get sheetWidth(): number {
     return this.sheet.offsetWidth;
+  }
+
+  get chromeHeight(): number {
+    return this.chrome.offsetHeight;
+  }
+
+  get chromeWidth(): number {
+    return this.chrome.offsetWidth;
   }
 
   render(model: ShellModel): void {

@@ -1,0 +1,28 @@
+/* Shared studio tokens. UI should use these instead of new hex values. */
+
+:root {
+  color-scheme: dark;
+  --ink: #2a1f18;
+  --ink-soft: #4a3b32;
+  --paper: #f6efe4;
+  --paper-2: #e4d5c3;
+  --paper-raised: #fffaf4;
+  --line: #8a7564;
+  --clay: #a84c28;
+  --clay-deep: #6f3018;
+  --on-clay: #fffaf6;
+  --muted: #5c4a3c;
+  --warn: #8a3418;
+  --studio: #2a211c;
+  --cream: #f7f1e8;
+  --shadow: 0 -12px 40px rgba(28, 22, 19, 0.28);
+  --radius: 22px;
+  --touch: 44px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --font: Outfit, "Avenir Next", "Segoe UI", sans-serif;
+  --display: Fraunces, Georgia, "Iowan Old Style", serif;
+  font-family: var(--font);
+}
