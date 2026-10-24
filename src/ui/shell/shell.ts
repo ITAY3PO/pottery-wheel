@@ -1,5 +1,6 @@
 import { CLAY_TYPES, type ClayType } from '../../clay/clays';
 import type { ClayTypeId } from '../../core/types';
+import type { QualityLevel, QualityMode } from '../../render/quality';
 
 export interface ShellAction {
   id: string;
@@ -46,6 +47,13 @@ export interface ShellHandlers {
   onDiscard: () => void;
   onConfirmDiscard: () => void;
   onHelp: () => void;
+  onQuality: (mode: QualityMode) => void;
+}
+
+export interface QualityChoice {
+  mode: QualityMode;
+  level: QualityLevel;
+  shadows: boolean;
 }
 
 export class Shell {
@@ -64,14 +72,22 @@ export class Shell {
   private meterNode: HTMLElement | null = null;
   private messageNode: HTMLElement | null = null;
   private speedReadout: HTMLElement | null = null;
+  private actionButtons: HTMLButtonElement[] = [];
+  private startButton: HTMLButtonElement | null = null;
+  private quality: QualityChoice = { mode: 'auto', level: 'medium', shadows: false };
+  private qualityDialog: HTMLElement | null = null;
+  private qualityNote: HTMLElement | null = null;
 
   constructor(
     root: HTMLElement,
     private readonly handlers: ShellHandlers,
   ) {
-    const wordmark = document.createElement('header');
-    wordmark.className = 'wordmark';
-    wordmark.innerHTML = '<h1>The Wheel</h1><p></p>';
+    const adopted = root.querySelector(':scope > .wordmark');
+    const wordmark = adopted instanceof HTMLElement ? adopted : document.createElement('header');
+    if (!(adopted instanceof HTMLElement)) {
+      wordmark.className = 'wordmark';
+      wordmark.innerHTML = '<h1>The Wheel</h1><p></p>';
+    }
     const help = document.createElement('button');
     help.type = 'button';
     help.className = 'help';
@@ -79,9 +95,16 @@ export class Shell {
     help.setAttribute('aria-controls', 'throwing-tutorial');
     help.setAttribute('aria-expanded', 'false');
     help.addEventListener('click', () => this.handlers.onHelp());
+    const settings = document.createElement('button');
+    settings.type = 'button';
+    settings.className = 'settings';
+    settings.textContent = 'Settings';
+    settings.setAttribute('aria-haspopup', 'dialog');
+    settings.setAttribute('aria-expanded', 'false');
+    settings.addEventListener('click', () => this.toggleQuality(settings));
     const topbar = document.createElement('div');
     topbar.className = 'topbar';
-    topbar.append(help);
+    topbar.append(help, settings);
     const chrome = document.createElement('div');
     chrome.className = 'sheet-chrome';
     const stepper = document.createElement('div');
@@ -94,7 +117,8 @@ export class Shell {
     // Stepper, tutorial, and tip stay outside the nodes renderSetup / renderPiece
     // replace. In-place patches of the sheet body must keep working.
     chrome.append(stepper, sheet, tip);
-    root.append(wordmark, topbar, chrome);
+    if (adopted instanceof HTMLElement) root.append(topbar, chrome);
+    else root.append(wordmark, topbar, chrome);
     this.subtitle = wordmark.querySelector('p') as HTMLElement;
     this.topbar = topbar;
     this.chrome = chrome;
@@ -153,9 +177,9 @@ export class Shell {
     }
     if (this.meterNode) this.meterNode.style.width = `${Math.round((model.centered ?? 0) * 100)}%`;
     if (this.speedReadout) this.speedReadout.textContent = speedLabel(model.speed);
-    const start = this.sheet.querySelector<HTMLButtonElement>('[data-start]');
+    this.startButton = this.sheet.querySelector<HTMLButtonElement>('[data-start]');
     const stop = this.sheet.querySelector<HTMLButtonElement>('[data-stop]');
-    if (start) start.setAttribute('aria-pressed', model.running ? 'true' : 'false');
+    if (this.startButton) this.startButton.setAttribute('aria-pressed', model.running ? 'true' : 'false');
     if (stop) stop.classList.toggle('down', !model.running && model.rpm < 1);
     for (const action of model.actions) {
       const button = this.sheet.querySelector<HTMLButtonElement>(`[data-action="${CSS.escape(action.id)}"]`);
@@ -196,6 +220,8 @@ export class Shell {
     this.meterNode = null;
     this.messageNode = null;
     this.speedReadout = null;
+    this.startButton = null;
+    this.actionButtons = [];
   }
 
   private renderPiece(model: ShellModel): void {
@@ -252,8 +278,108 @@ export class Shell {
     this.sheet.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach((button) => {
       button.addEventListener('click', () => this.handlers.onTool(button.dataset.tool || ''));
     });
+    this.actionButtons = [];
     this.sheet.querySelectorAll<HTMLButtonElement>('[data-action]').forEach((button) => {
+      this.actionButtons.push(button);
       button.addEventListener('click', () => this.handlers.onAction(button.dataset.action || ''));
+    });
+    this.startButton = this.sheet.querySelector<HTMLButtonElement>('[data-start]');
+  }
+
+  /**
+   * Rpm, hint, and action enabled flags while the wheel is spinning.
+   * Avoids rebuilding the sheet model on every frame.
+   */
+  setLive(live: {
+    rpm: number;
+    hint: string;
+    centered: number | null;
+    running: boolean;
+    speed: number;
+    actionEnabled: (id: string) => boolean;
+  }): void {
+    if (this.rpmNode) this.rpmNode.textContent = String(Math.round(live.rpm));
+    if (this.hintNode && this.hintNode.textContent !== live.hint) this.hintNode.textContent = live.hint;
+    if (this.meterNode && live.centered != null) {
+      const width = `${Math.round(live.centered * 100)}%`;
+      if (this.meterNode.style.width !== width) this.meterNode.style.width = width;
+    }
+    if (this.speedReadout) {
+      const label = speedLabel(live.speed);
+      if (this.speedReadout.textContent !== label) this.speedReadout.textContent = label;
+    }
+    if (this.startButton) this.startButton.setAttribute('aria-pressed', live.running ? 'true' : 'false');
+    for (const button of this.actionButtons) {
+      const enabled = live.actionEnabled(button.dataset.action || '');
+      if (button.disabled === enabled) button.disabled = !enabled;
+    }
+  }
+
+  setQuality(choice: QualityChoice): void {
+    this.quality = choice;
+    this.paintQuality();
+  }
+
+  private toggleQuality(button: HTMLButtonElement): void {
+    if (this.qualityDialog) {
+      this.closeQuality(button);
+      return;
+    }
+    const dialog = document.createElement('div');
+    dialog.className = 'quality-dialog';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', 'quality-title');
+    dialog.innerHTML = `
+      <div class="quality-card">
+        <h2 id="quality-title">Quality</h2>
+        <p class="lede">Auto follows the frame rate. A manual choice stays put.</p>
+        <div class="quality-modes" role="group" aria-label="Quality"></div>
+        <p class="quality-note"></p>
+        <button class="ghost" type="button" data-close>Close</button>
+      </div>
+    `;
+    const modes = dialog.querySelector('.quality-modes') as HTMLElement;
+    const choices: { id: QualityMode; label: string }[] = [
+      { id: 'auto', label: 'Auto' },
+      { id: 'low', label: 'Low' },
+      { id: 'medium', label: 'Medium' },
+      { id: 'high', label: 'High' },
+    ];
+    for (const choice of choices) {
+      const modeButton = document.createElement('button');
+      modeButton.type = 'button';
+      modeButton.className = 'quality-mode';
+      modeButton.dataset.mode = choice.id;
+      modeButton.textContent = choice.label;
+      modeButton.addEventListener('click', () => this.handlers.onQuality(choice.id));
+      modes.append(modeButton);
+    }
+    dialog.querySelector('[data-close]')?.addEventListener('click', () => this.closeQuality(button));
+    this.qualityNote = dialog.querySelector('.quality-note');
+    this.qualityDialog = dialog;
+    button.setAttribute('aria-expanded', 'true');
+    this.chrome.parentElement?.append(dialog);
+    this.paintQuality();
+  }
+
+  private closeQuality(button: HTMLButtonElement): void {
+    this.qualityDialog?.remove();
+    this.qualityDialog = null;
+    this.qualityNote = null;
+    button.setAttribute('aria-expanded', 'false');
+  }
+
+  private paintQuality(): void {
+    if (!this.qualityDialog) return;
+    const running = this.quality.level === 'low' ? 'low' : this.quality.level === 'high' ? 'high' : 'medium';
+    const shadows = this.quality.shadows ? 'Shadows on.' : 'Shadows off.';
+    if (this.qualityNote) {
+      this.qualityNote.textContent =
+        this.quality.mode === 'auto' ? `Auto is using ${running}. ${shadows}` : `${shadows}`;
+    }
+    this.qualityDialog.querySelectorAll<HTMLButtonElement>('.quality-mode').forEach((button) => {
+      button.setAttribute('aria-pressed', button.dataset.mode === this.quality.mode ? 'true' : 'false');
     });
   }
 }

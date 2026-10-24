@@ -52,15 +52,35 @@ export function spawnTrimChips(
   }
 }
 
-/** Advance chips and return the ones still in the air, for the studio to draw. */
-export function stepTrimChips(dt: number): TrimChipView[] {
+const chipView: TrimChipView[] = [];
+const noChips: readonly TrimChipView[] = [];
+
+/**
+ * Advance chips and return the ones still in the air, for the studio to draw.
+ * The array is reused next call. Read it before the next step.
+ */
+export function stepTrimChips(dt: number): readonly TrimChipView[] {
   let left = Math.max(0, Math.min(dt, 0.25));
   while (left > 1e-5) {
     const step = Math.min(0.05, left);
     left -= step;
     integrate(step);
   }
-  return chips.map((chip) => ({ x: chip.x, y: chip.y, z: chip.z, size: chip.size }));
+  if (chips.length === 0) return noChips;
+  chipView.length = chips.length;
+  for (let i = 0; i < chips.length; i++) {
+    const chip = chips[i];
+    let slot = chipView[i];
+    if (!slot) {
+      slot = { x: 0, y: 0, z: 0, size: 0 };
+      chipView[i] = slot;
+    }
+    slot.x = chip.x;
+    slot.y = chip.y;
+    slot.z = chip.z;
+    slot.size = chip.size;
+  }
+  return chipView;
 }
 
 function integrate(step: number): void {

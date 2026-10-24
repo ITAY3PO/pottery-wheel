@@ -22,6 +22,7 @@ import { buildAttachmentGeometry } from '../render/attachmentMesh';
 import { ClayMesh } from '../render/clayMesh';
 import { applyFiredLook } from '../firing/look';
 import { applyClayFinish, bindSurfaceUniforms, createClayMaterial } from '../render/materials';
+import { currentProfile } from '../render/quality';
 import { createSurfaceTextures, type SurfaceTextures } from '../render/surfaceTextures';
 
 /**
@@ -65,7 +66,7 @@ export class Turntable {
   private readonly onUp: (event: PointerEvent) => void;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    const pixelRatio = currentProfile().pixelRatio;
     this.renderer = new WebGLRenderer({
       canvas,
       antialias: pixelRatio < 1.5,
@@ -160,7 +161,7 @@ export class Turntable {
     const width = this.canvas.clientWidth;
     const height = this.canvas.clientHeight;
     if (width < 2 || height < 2) return;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(currentProfile().pixelRatio);
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / Math.max(1, height);
     this.camera.updateProjectionMatrix();

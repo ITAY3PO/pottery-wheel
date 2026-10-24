@@ -7,6 +7,7 @@ import {
   DirectionalLight,
   DoubleSide,
   Group,
+  OrthographicCamera,
   InstancedMesh,
   LatheGeometry,
   Mesh,
@@ -14,6 +15,7 @@ import {
   MeshBasicMaterial,
   MeshPhysicalMaterial,
   MeshStandardMaterial,
+  PCFShadowMap,
   PMREMGenerator,
   RepeatWrapping,
   Scene,
@@ -28,7 +30,8 @@ import { getClay } from '../clay/clays';
 import { dressAttachmentMaterial } from '../firing/look';
 import { maxOuterAtRing, pieceHeight } from '../clay/grid';
 import type { Attachment, MeshSurface, PieceState, SurfaceHit } from '../core/types';
-import { buildAttachmentGeometry } from './attachmentMesh';
+import { buildAttachmentGeometry, writeAttachmentGeometry } from './attachmentMesh';
+import { currentProfile, type QualityProfile } from './quality';
 import { CameraRig } from './cameraRig';
 import { ClayMesh } from './clayMesh';
 import { raycastToUV } from './raycastUV';
@@ -69,14 +72,26 @@ export class Studio {
   private readonly wire: Mesh;
   private chipMesh: InstancedMesh | null = null;
   private readonly chipDummy = new Object3D();
+  private readonly keyLight: DirectionalLight;
+  private readonly table: Mesh;
+  private readonly bodyList: Mesh[] = [];
+  private bodyListDirty = true;
+  private maxRings = 4096;
+  private maxSegments = 4096;
+  private qualityKey = '';
+  private viewWidth = 1;
+  private viewHeight = 1;
+  private environmentReady = false;
 
   constructor(canvas: HTMLCanvasElement) {
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    const profile = currentProfile();
+    this.maxRings = profile.maxRings;
+    this.maxSegments = profile.maxSegments;
     this.renderer = new WebGLRenderer({
       canvas,
-      // DPR 2 already samples finely. MSAA on top of that blows the fill rate
-      // on a mid-range phone, which is the machine this has to hold 60fps on.
-      antialias: pixelRatio < 1.5,
+      // MSAA on top of a phone-sized buffer blows the fill rate. Quality
+      // turns it on only for a sharp desktop pixel.
+      antialias: profile.pixelRatio <= 1,
       alpha: false,
       powerPreference: 'high-performance',
       failIfMajorPerformanceCaveat: false,
@@ -85,21 +100,36 @@ export class Studio {
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.12;
     this.renderer.setClearColor(new Color('#3a2e28'), 1);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-
-    const pmrem = new PMREMGenerator(this.renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    pmrem.dispose();
+    this.renderer.setPixelRatio(profile.pixelRatio);
+    this.renderer.shadowMap.type = PCFShadowMap;
+    this.renderer.shadowMap.enabled = profile.shadows;
 
     const key = new DirectionalLight(0xfff0dc, 3.4);
     key.position.set(-0.85, 1.25, 0.62);
+    key.castShadow = profile.shadows;
+    key.shadow.mapSize.set(512, 512);
+    const shadowCamera = key.shadow.camera;
+    if (shadowCamera instanceof OrthographicCamera) {
+      shadowCamera.near = 0.08;
+      shadowCamera.far = 3.2;
+      shadowCamera.left = -0.55;
+      shadowCamera.right = 0.55;
+      shadowCamera.top = 0.75;
+      shadowCamera.bottom = -0.28;
+    }
+    key.shadow.bias = -0.0006;
+    key.shadow.normalBias = 0.02;
+    this.keyLight = key;
     this.scene.add(key);
 
     this.scene.add(buildCove());
-    this.scene.add(buildTable());
+    this.table = buildTable();
+    this.table.receiveShadow = profile.shadows;
+    this.scene.add(this.table);
     this.scene.add(buildPan());
     this.scene.add(this.wheelPivot);
-    buildWheelHead(this.wheelPivot);
+    buildWheelHead(this.wheelPivot, profile.shadows);
+    this.scheduleEnvironment();
 
     this.clayPivot.add(this.attachmentRoot);
     this.scene.add(this.clayPivot);
@@ -129,9 +159,32 @@ export class Studio {
   }
 
   setSize(width: number, height: number, sheetHeight: number): void {
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.viewWidth = width;
+    this.viewHeight = height;
     this.renderer.setSize(width, height, true);
     this.rig.resize(width, height, sheetHeight);
+  }
+
+  /** Pixel ratio, shadow map, and clay mesh resolution. Mesh rebuilds once per change. */
+  applyQuality(profile: QualityProfile): void {
+    const key = `${profile.pixelRatio}|${profile.shadows ? 1 : 0}|${profile.maxRings}|${profile.maxSegments}`;
+    if (key === this.qualityKey) return;
+    this.qualityKey = key;
+    const meshChanged = this.maxRings !== profile.maxRings || this.maxSegments !== profile.maxSegments;
+    this.maxRings = profile.maxRings;
+    this.maxSegments = profile.maxSegments;
+    if (this.renderer.getPixelRatio() !== profile.pixelRatio) {
+      this.renderer.setPixelRatio(profile.pixelRatio);
+      this.renderer.setSize(this.viewWidth, this.viewHeight, true);
+    }
+    this.setShadows(profile.shadows);
+    if (meshChanged && this.clayMesh) {
+      this.clayPivot.remove(this.clayMesh.mesh);
+      delete this.clayMesh.mesh.userData.surfaceTextures;
+      this.clayMesh.geometry.dispose();
+      this.clayMesh = null;
+      this.bodyListDirty = true;
+    }
   }
 
   syncPiece(piece: PieceState | null): void {
@@ -153,18 +206,20 @@ export class Studio {
       this.forgetSurfaceBindings();
       this.surfacePieceId = piece.id;
     }
-    if (
-      !this.clayMesh ||
-      this.clayMesh.rings !== piece.grid.rings ||
-      this.clayMesh.segments !== piece.grid.segments
-    ) {
+    const rings = Math.max(8, Math.min(piece.grid.rings, this.maxRings));
+    const segments = Math.max(8, Math.min(piece.grid.segments, this.maxSegments));
+    if (!this.clayMesh || this.clayMesh.rings !== rings || this.clayMesh.segments !== segments) {
       if (this.clayMesh) {
         this.clayPivot.remove(this.clayMesh.mesh);
+        delete this.clayMesh.mesh.userData.surfaceTextures;
         this.clayMesh.geometry.dispose();
       }
-      this.clayMesh = new ClayMesh(piece.grid.rings, piece.grid.segments, this.ensureBodyMaterial());
+      this.clayMesh = new ClayMesh(rings, segments, this.ensureBodyMaterial());
+      this.clayMesh.mesh.castShadow = this.renderer.shadowMap.enabled;
+      this.clayMesh.mesh.receiveShadow = this.renderer.shadowMap.enabled;
       bindSurfaceUniforms(this.clayMesh.mesh);
       this.clayPivot.add(this.clayMesh.mesh);
+      this.bodyListDirty = true;
       this.finishStage = '';
     }
     this.clayMesh.update(piece.grid);
@@ -274,10 +329,13 @@ export class Studio {
   }
 
   bodyObjects(): Mesh[] {
-    const meshes: Mesh[] = [];
-    if (this.clayMesh) meshes.push(this.clayMesh.mesh);
-    for (const mesh of this.attachmentMeshes.values()) meshes.push(mesh);
-    return meshes;
+    if (this.bodyListDirty) {
+      this.bodyList.length = 0;
+      if (this.clayMesh) this.bodyList.push(this.clayMesh.mesh);
+      for (const mesh of this.attachmentMeshes.values()) this.bodyList.push(mesh);
+      this.bodyListDirty = false;
+    }
+    return this.bodyList;
   }
 
   /** UV hit from the ray `CameraRig.aimPointer` just aimed. */
@@ -332,6 +390,7 @@ export class Studio {
       if (live.has(id)) continue;
       this.releaseAttachment(mesh);
       this.attachmentMeshes.delete(id);
+      this.bodyListDirty = true;
       const cached = this.surfaceCache.get(id);
       if (cached) {
         disposeSurfaceTextures(cached);
@@ -339,20 +398,26 @@ export class Studio {
       }
     }
     for (const attachment of piece.attachments) {
-      const signature = attachmentSignature(attachment);
       let mesh = this.attachmentMeshes.get(attachment.id);
-      if (!mesh || mesh.userData.signature !== signature) {
-        if (mesh) {
-          this.releaseAttachment(mesh);
-          this.attachmentMeshes.delete(attachment.id);
-        }
-        const material = cloneClayMaterial(this.ensureBodyMaterial());
-        mesh = new Mesh(buildAttachmentGeometry(attachment), material);
-        mesh.userData.signature = signature;
+      if (!mesh) {
+        mesh = new Mesh(buildAttachmentGeometry(attachment), cloneClayMaterial(this.ensureBodyMaterial()));
+        mesh.castShadow = this.renderer.shadowMap.enabled;
+        mesh.receiveShadow = this.renderer.shadowMap.enabled;
         mesh.userData.meshId = attachment.id;
+        rememberAttachment(mesh, attachment);
         this.attachmentRoot.add(mesh);
         this.attachmentMeshes.set(attachment.id, mesh);
+        this.bodyListDirty = true;
+      } else if (!attachmentUnchanged(mesh, attachment)) {
+        if (!writeAttachmentGeometry(mesh.geometry, attachment)) {
+          const next = buildAttachmentGeometry(attachment);
+          mesh.geometry.dispose();
+          mesh.geometry = next;
+        }
+        rememberAttachment(mesh, attachment);
       }
+      // New meshes and geometry-only updates keep the same material. Rebind
+      // glaze uniforms on both so a handle does not lose its coat.
       this.bindAttachmentMaterial(mesh);
       const surface = piece.surfaces.find((entry) => entry.meshId === attachment.id);
       if (surface && mesh) this.ensureTextures(mesh, surface);
@@ -362,6 +427,39 @@ export class Studio {
   private clearAttachments(): void {
     for (const mesh of this.attachmentMeshes.values()) this.releaseAttachment(mesh);
     this.attachmentMeshes.clear();
+    this.bodyListDirty = true;
+  }
+
+  private setShadows(enabled: boolean): void {
+    this.renderer.shadowMap.enabled = enabled;
+    this.keyLight.castShadow = enabled;
+    this.table.receiveShadow = enabled;
+    this.wheelPivot.traverse((child) => {
+      const mesh = child as Mesh;
+      if (mesh.isMesh) mesh.receiveShadow = enabled;
+    });
+    if (this.clayMesh) {
+      this.clayMesh.mesh.castShadow = enabled;
+      this.clayMesh.mesh.receiveShadow = enabled;
+    }
+    for (const mesh of this.attachmentMeshes.values()) {
+      mesh.castShadow = enabled;
+      mesh.receiveShadow = enabled;
+    }
+  }
+
+  /** PMREM is a long task. The first frames render with the key light alone. */
+  private scheduleEnvironment(): void {
+    const build = () => {
+      if (this.environmentReady) return;
+      this.environmentReady = true;
+      const pmrem = new PMREMGenerator(this.renderer);
+      this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      pmrem.dispose();
+    };
+    const idle = window.requestIdleCallback;
+    if (typeof idle === 'function') idle(() => build(), { timeout: 1200 });
+    else window.setTimeout(build, 400);
   }
 
   private releaseAttachment(mesh: Mesh): void {
@@ -438,11 +536,50 @@ function throwingContacts(): Mesh[] {
   return [rib, sponge, water, needle, knife];
 }
 
-function attachmentSignature(attachment: Attachment): string {
-  const points = attachment.points
-    .map((point) => `${point.x.toFixed(4)},${point.y.toFixed(4)},${point.z.toFixed(4)},${point.radius.toFixed(4)}`)
-    .join(';');
-  return `${attachment.kind}|${attachment.joinBlend}|${attachment.tubularSegments}|${points}`;
+function rememberAttachment(mesh: Mesh, attachment: Attachment): void {
+  let snap = mesh.userData.snap as Float32Array | undefined;
+  if (!snap || snap.length !== attachment.points.length * 4) {
+    snap = new Float32Array(attachment.points.length * 4);
+    mesh.userData.snap = snap;
+  }
+  writeSnap(snap, attachment);
+  mesh.userData.kind = attachment.kind;
+  mesh.userData.joinBlend = attachment.joinBlend;
+  mesh.userData.tubular = attachment.tubularSegments;
+  mesh.userData.radial = attachment.radialSegments;
+}
+
+function writeSnap(snap: Float32Array, attachment: Attachment): void {
+  for (let i = 0; i < attachment.points.length; i++) {
+    const point = attachment.points[i];
+    const offset = i * 4;
+    snap[offset] = point.x;
+    snap[offset + 1] = point.y;
+    snap[offset + 2] = point.z;
+    snap[offset + 3] = point.radius;
+  }
+}
+
+function attachmentUnchanged(mesh: Mesh, attachment: Attachment): boolean {
+  const snap = mesh.userData.snap as Float32Array | undefined;
+  if (!snap || snap.length !== attachment.points.length * 4) return false;
+  if (mesh.userData.kind !== attachment.kind) return false;
+  if (mesh.userData.joinBlend !== attachment.joinBlend) return false;
+  if (mesh.userData.tubular !== attachment.tubularSegments) return false;
+  if (mesh.userData.radial !== attachment.radialSegments) return false;
+  for (let i = 0; i < attachment.points.length; i++) {
+    const point = attachment.points[i];
+    const offset = i * 4;
+    if (
+      snap[offset] !== point.x ||
+      snap[offset + 1] !== point.y ||
+      snap[offset + 2] !== point.z ||
+      snap[offset + 3] !== point.radius
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function buildCove(): Mesh {
@@ -489,12 +626,13 @@ function buildPan(): Mesh {
   );
 }
 
-function buildWheelHead(pivot: Group): void {
+function buildWheelHead(pivot: Group, shadows: boolean): void {
   const head = new Mesh(
     new CylinderGeometry(0.146, 0.146, 0.02, 64),
     new MeshStandardMaterial({ color: 0x8d939a, metalness: 0.92, roughness: 0.34 }),
   );
   head.position.y = -0.02;
+  head.receiveShadow = shadows;
   pivot.add(head);
 
   const bat = new Mesh(
@@ -507,6 +645,7 @@ function buildWheelHead(pivot: Group): void {
     }),
   );
   bat.position.y = -0.0045;
+  bat.receiveShadow = shadows;
   pivot.add(bat);
 
   for (const radius of [0.045, 0.078, 0.11]) {

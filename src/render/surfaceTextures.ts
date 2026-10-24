@@ -26,10 +26,36 @@ export function createSurfaceTextures(map: SurfaceMap): SurfaceTextures {
 }
 
 export function markSurfaceTexturesDirty(textures: SurfaceTextures): void {
-  textures.glazeId.needsUpdate = true;
-  textures.thickness.needsUpdate = true;
-  textures.wax.needsUpdate = true;
-  textures.underglaze.needsUpdate = true;
+  // Painting usually touches one or two channels. Re-uploading the other
+  // 128² maps every dab is a long task on a phone GPU.
+  uploadIfChanged(textures.glazeId);
+  uploadIfChanged(textures.thickness);
+  uploadIfChanged(textures.wax);
+  uploadIfChanged(textures.underglaze);
+}
+
+function uploadIfChanged(texture: DataTexture): void {
+  const data = textureData(texture);
+  if (!data) {
+    texture.needsUpdate = true;
+    return;
+  }
+  const hash = hashBytes(data);
+  const stamp = texture.userData as { pwHash?: number; pwLen?: number };
+  if (stamp.pwHash === hash && stamp.pwLen === data.byteLength) return;
+  stamp.pwHash = hash;
+  stamp.pwLen = data.byteLength;
+  texture.needsUpdate = true;
+}
+
+function hashBytes(data: ArrayBufferView): number {
+  const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  let hash = 2166136261;
+  for (let i = 0; i < bytes.length; i++) {
+    hash ^= bytes[i];
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
 }
 
 export function disposeSurfaceTextures(textures: SurfaceTextures): void {

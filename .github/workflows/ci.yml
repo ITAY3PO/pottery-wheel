@@ -29,3 +29,12 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: End to end
+        run: npm run e2e
+
+      - name: Lighthouse
+        run: npm run lighthouse

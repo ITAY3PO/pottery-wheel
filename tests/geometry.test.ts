@@ -17,6 +17,18 @@ describe('fixed clay mesh', () => {
     expect(mesh.geometry.getAttribute('position').count).toBe(mesh.vertexCount);
     expect(mesh.geometry.getAttribute('uv').count).toBe(mesh.vertexCount);
   });
+
+  it('samples a coarser render mesh from the full grid without rebuilding', () => {
+    const piece = createPiece('porcelain', 0.7);
+    const mesh = new ClayMesh(40, 24);
+    const id = mesh.geometry.uuid;
+    expect(mesh.vertexCount).toBe(40 * 25 * 2);
+    mesh.update(piece.grid);
+    piece.grid.revision += 1;
+    mesh.update(piece.grid);
+    expect(mesh.geometry.uuid).toBe(id);
+    expect(mesh.geometry.getAttribute('position').count).toBe(mesh.vertexCount);
+  });
 });
 
 describe('attachment ids', () => {

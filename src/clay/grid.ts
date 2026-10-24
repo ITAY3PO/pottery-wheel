@@ -360,33 +360,61 @@ export function allocateGrid(rings: number, segments: number): ClayGrid {
   };
 }
 
-/** Mean-radius arc length, normalized 0..1, one sample per ring. */
-export function computeArc(grid: ClayGrid, channel: 'outer' | 'inner'): Float32Array {
-  const arc = new Float32Array(grid.rings);
+let arcScratchOuter: Float32Array | null = null;
+let arcScratchInner: Float32Array | null = null;
+let radiiScratch: Float32Array | null = null;
+
+function scratchArc(channel: 'outer' | 'inner', rings: number): Float32Array {
+  if (channel === 'outer') {
+    if (!arcScratchOuter || arcScratchOuter.length < rings) arcScratchOuter = new Float32Array(rings);
+    return arcScratchOuter;
+  }
+  if (!arcScratchInner || arcScratchInner.length < rings) arcScratchInner = new Float32Array(rings);
+  return arcScratchInner;
+}
+
+/** Mean-radius arc length, normalized 0..1, written into `out` (length >= rings). */
+export function computeArcInto(grid: ClayGrid, channel: 'outer' | 'inner', out: Float32Array): void {
   const data = channel === 'outer' ? grid.outer : grid.inner;
-  let length = 0;
-  const radii = new Float32Array(grid.rings);
+  if (!radiiScratch || radiiScratch.length < grid.rings) radiiScratch = new Float32Array(grid.rings);
+  const radii = radiiScratch;
   for (let r = 0; r < grid.rings; r++) radii[r] = meanChannel(data, r, grid.segments);
+  let length = 0;
+  out[0] = 0;
   for (let r = 1; r < grid.rings; r++) {
     const dr = radii[r] - radii[r - 1];
     const dy = grid.y[r] - grid.y[r - 1];
     length += Math.hypot(dr, dy);
-    arc[r] = length;
+    out[r] = length;
   }
   if (length < 1e-8) {
-    for (let r = 0; r < grid.rings; r++) arc[r] = r / (grid.rings - 1);
-    return arc;
+    const denom = grid.rings - 1 || 1;
+    for (let r = 0; r < grid.rings; r++) out[r] = r / denom;
+    return;
   }
-  for (let r = 0; r < grid.rings; r++) arc[r] /= length;
+  for (let r = 0; r < grid.rings; r++) out[r] /= length;
+}
+
+/** Mean-radius arc length, normalized 0..1, one owned sample per ring. */
+export function computeArc(grid: ClayGrid, channel: 'outer' | 'inner'): Float32Array {
+  const arc = new Float32Array(grid.rings);
+  computeArcInto(grid, channel, arc);
   return arc;
 }
 
+/**
+ * Live arc table. The returned array is reused on the next call for that
+ * channel, so callers read it immediately and do not store it. Frozen arcs
+ * are the piece's own buffers and stay put.
+ */
 export function currentArc(grid: ClayGrid, channel: 'outer' | 'inner'): Float32Array {
   if (grid.uvFrozen) {
     const frozen = channel === 'outer' ? grid.arcOuter : grid.arcInner;
     if (frozen && frozen.length === grid.rings) return frozen;
   }
-  return computeArc(grid, channel);
+  const arc = scratchArc(channel, grid.rings);
+  computeArcInto(grid, channel, arc);
+  return arc;
 }
 
 /** Freeze profile UVs. Called when the piece leaves the wheel. */
