@@ -23,6 +23,11 @@ describe('registries', () => {
         'trim-round',
         'trim-square',
         'trim-ribbon',
+        'handle',
+        'coil',
+        'sprig',
+        'score',
+        'slip',
       ]),
     );
     expect(loadStages().map((stage) => stage.id)).toEqual([

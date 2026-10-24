@@ -1,14 +1,11 @@
 /**
- * STUB — handbuild agent owns this folder.
+ * Hand-building at leather-hard, off the wheel.
  *
- * At leather-hard, and only when `canAttachHandle(piece)` is true, build an
- * Attachment with `createAttachment` and push it onto `piece.attachments`.
- * Also call `ensureAttachmentSurface(piece, attachment.id)`.
- * The renderer sweeps a tube along `points` in piece-local space, flares the
- * ends by `joinBlend`, and sets UVs (u around the tube, v along the spline).
- * Do not edit src/core/registry.ts — if you need a tool, add src/tools/handle.ts.
+ * Draw a handle, coil, or sprig with the tools in `src/tools`. Press to pinch
+ * a section thinner; drag an attachment to twist it. Score and slip the join
+ * first — `scored` and `slipped` are stored on the attachment for the kiln.
+ * If either flag is missing or false, `attachmentWillCrack` is true.
  */
-import { createAttachment } from '../core/attachment';
 import { canAttachHandle } from '../core/stateMachine';
 import { ensureAttachmentSurface } from '../core/surfaceMap';
 import type { Attachment, PieceState } from '../core/types';
@@ -22,4 +19,5 @@ export function attachHandle(piece: PieceState, attachment: Attachment): void {
   piece.updatedAt = Date.now();
 }
 
-export { createAttachment };
+export { createAttachment } from '../core/attachment';
+export { attachmentWillCrack, readJoin, writeJoin } from './join';
