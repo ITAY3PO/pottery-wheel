@@ -303,6 +303,14 @@ export class Studio {
     if (body) this.ensureTextures(this.clayMesh.mesh, body);
   }
 
+  /** Dress and point glaze uniforms at this mesh. Runs for a new mesh and for a geometry-only update. */
+  private bindAttachmentMaterial(mesh: Mesh): void {
+    const material = mesh.material;
+    if (Array.isArray(material) || !(material instanceof MeshPhysicalMaterial)) return;
+    if (material !== this.bodyMaterial) dressAttachmentMaterial(material);
+    bindSurfaceUniforms(mesh);
+  }
+
   private ensureTextures(mesh: Mesh, surface: MeshSurface): void {
     let textures = this.surfaceCache.get(surface.meshId);
     if (textures && !surfaceTexturesMatch(textures, surface.map)) {
@@ -339,14 +347,13 @@ export class Studio {
           this.attachmentMeshes.delete(attachment.id);
         }
         const material = cloneClayMaterial(this.ensureBodyMaterial());
-        dressAttachmentMaterial(material);
         mesh = new Mesh(buildAttachmentGeometry(attachment), material);
-        bindSurfaceUniforms(mesh);
         mesh.userData.signature = signature;
         mesh.userData.meshId = attachment.id;
         this.attachmentRoot.add(mesh);
         this.attachmentMeshes.set(attachment.id, mesh);
       }
+      this.bindAttachmentMaterial(mesh);
       const surface = piece.surfaces.find((entry) => entry.meshId === attachment.id);
       if (surface && mesh) this.ensureTextures(mesh, surface);
     }

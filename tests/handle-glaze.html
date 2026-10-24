@@ -1,0 +1,166 @@
+<!doctype html>
+<meta charset="utf-8" />
+<canvas id="c" width="128" height="128"></canvas>
+<script type="module">
+import {
+  Color,
+  HemisphereLight,
+  Mesh,
+  MeshPhysicalMaterial,
+  NoToneMapping,
+  PerspectiveCamera,
+  PMREMGenerator,
+  Scene,
+  SRGBColorSpace,
+  WebGLRenderTarget,
+  WebGLRenderer,
+} from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { createAttachment } from '../src/core/attachment.ts';
+import { createPiece } from '../src/core/piece.ts';
+import { createSurfaceMap } from '../src/core/surfaceMap.ts';
+import { getClay } from '../src/clay/clays.ts';
+import { applyFiredLook, dressAttachmentMaterial } from '../src/firing/look.ts';
+import { buildAttachmentGeometry } from '../src/render/attachmentMesh.ts';
+import { applyClayFinish, bindSurfaceUniforms, cloneClayMaterial, createClayMaterial } from '../src/render/materials.ts';
+import { createSurfaceTextures } from '../src/render/surfaceTextures.ts';
+import { applyTurntableMaterials } from '../src/gallery/view.ts';
+
+function tube(material, segments = 12) {
+  const attachment = createAttachment({
+    id: 'att-probe',
+    kind: 'handle',
+    points: [
+      { x: 0, y: 0, z: 0, radius: 0.045 },
+      { x: 0, y: 0.08, z: 0, radius: 0.045 },
+      { x: 0, y: 0.16, z: 0, radius: 0.045 },
+    ],
+    tubularSegments: segments,
+    radialSegments: segments,
+  });
+  const mesh = new Mesh(buildAttachmentGeometry(attachment), material);
+  mesh.frustumCulled = false;
+  return mesh;
+}
+
+function coat(map, id, thick) {
+  map.glazeId.fill(id);
+  map.thickness.fill(thick);
+  map.wax.fill(0);
+}
+
+const renderer = new WebGLRenderer({ canvas: document.getElementById('c'), antialias: false, alpha: false });
+renderer.setPixelRatio(1);
+renderer.setSize(128, 128, false);
+renderer.outputColorSpace = SRGBColorSpace;
+renderer.toneMapping = NoToneMapping;
+renderer.setClearColor(0x202020, 1);
+const target = new WebGLRenderTarget(128, 128);
+const pixel = new Uint8Array(4);
+const camera = new PerspectiveCamera(28, 1, 0.01, 10);
+camera.position.set(0.28, 0.08, 0);
+camera.lookAt(0, 0.08, 0);
+
+function shot(mesh, environment) {
+  const scene = new Scene();
+  scene.background = new Color(0x202020);
+  if (environment) scene.environment = environment;
+  scene.add(new HemisphereLight(0xffffff, 0xffffff, 2.4));
+  scene.add(mesh);
+  renderer.setRenderTarget(target);
+  renderer.render(scene, camera);
+  renderer.render(scene, camera);
+  renderer.readRenderTargetPixels(target, 64, 64, 1, 1, pixel);
+  return [pixel[0], pixel[1], pixel[2], pixel[3]];
+}
+
+const clay = getClay('stoneware');
+const piece = createPiece('stoneware', 1);
+piece.stage = 'glaze-fired';
+const map = createSurfaceMap(8, 8);
+coat(map, 3, 0.45);
+const textures = createSurfaceTextures(map);
+
+const body = createClayMaterial();
+applyClayFinish(body, clay, 'glaze-fired');
+applyFiredLook(body, piece, 'body');
+const handleMat = cloneClayMaterial(body);
+applyClayFinish(handleMat, clay, 'glaze-fired');
+dressAttachmentMaterial(handleMat);
+const handle = tube(handleMat);
+handle.userData.surfaceTextures = textures;
+bindSurfaceUniforms(handle);
+
+const bareMap = createSurfaceMap(8, 8);
+const bareTex = createSurfaceTextures(bareMap);
+const bareMat = cloneClayMaterial(body);
+applyClayFinish(bareMat, clay, 'glaze-fired');
+dressAttachmentMaterial(bareMat);
+const bare = tube(bareMat);
+bare.userData.surfaceTextures = bareTex;
+bindSurfaceUniforms(bare);
+
+const plain = tube(new MeshPhysicalMaterial({ color: '#6e9484', metalness: 0, roughness: 0.55, clearcoat: 0, vertexColors: false }));
+const clayPlain = tube(new MeshPhysicalMaterial({ color: clay.colorFired, metalness: 0, roughness: 0.55, clearcoat: 0, vertexColors: false }));
+
+const gBody = createClayMaterial();
+const gHandle = createClayMaterial();
+applyClayFinish(gBody, clay, 'glaze-fired');
+applyClayFinish(gHandle, clay, 'glaze-fired');
+const gPiece = createPiece('stoneware', 1);
+gPiece.stage = 'glaze-fired';
+gPiece.attachments = [createAttachment({ id: 'att-gal', kind: 'handle', points: [{ x: 0, y: 0, z: 0, radius: 0.04 }, { x: 0, y: 0.16, z: 0, radius: 0.04 }] })];
+applyTurntableMaterials(gBody, gHandle, gPiece);
+const gMesh = tube(gHandle);
+gMesh.userData.surfaceTextures = textures;
+bindSurfaceUniforms(gMesh);
+
+const coarseMat = cloneClayMaterial(body);
+applyClayFinish(coarseMat, clay, 'glaze-fired');
+dressAttachmentMaterial(coarseMat);
+const coarse = tube(coarseMat, 4);
+coarse.userData.surfaceTextures = textures;
+bindSurfaceUniforms(coarse);
+
+const zeroMat = cloneClayMaterial(body);
+applyClayFinish(zeroMat, clay, 'glaze-fired');
+dressAttachmentMaterial(zeroMat);
+zeroMat.clearcoat = 0;
+zeroMat.envMapIntensity = 0;
+zeroMat.needsUpdate = true;
+const zero = tube(zeroMat);
+zero.userData.surfaceTextures = textures;
+bindSurfaceUniforms(zero);
+
+const pmrem = new PMREMGenerator(renderer);
+const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+pmrem.dispose();
+
+const lit = {
+  handle: shot(handle, null),
+  bare: shot(bare, null),
+  plain: shot(plain, null),
+  clayPlain: shot(clayPlain, null),
+  gallery: shot(gMesh, null),
+  coarse: shot(coarse, null),
+  zero: shot(zero, null),
+  handleEnv: shot(handle, env),
+  galleryEnv: shot(gMesh, env),
+};
+
+renderer.setPixelRatio(0.5);
+renderer.setSize(128, 128, false);
+const halfTarget = new WebGLRenderTarget(renderer.domElement.width, renderer.domElement.height);
+renderer.setRenderTarget(halfTarget);
+const halfScene = new Scene();
+halfScene.background = new Color(0x202020);
+halfScene.add(new HemisphereLight(0xffffff, 0xffffff, 2.4));
+halfScene.add(handle);
+renderer.render(halfScene, camera);
+renderer.render(halfScene, camera);
+const half = new Uint8Array(4);
+renderer.readRenderTargetPixels(halfTarget, Math.floor(halfTarget.width / 2), Math.floor(halfTarget.height / 2), 1, 1, half);
+
+window.__out = { ...lit, half: [half[0], half[1], half[2], half[3]] };
+document.title = 'ready';
+</script>

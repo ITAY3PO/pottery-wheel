@@ -227,11 +227,11 @@ const PAINTER_CSS = `
   border-color: var(--ink);
 }
 .painter-swatch-wrap {
-  position: relative;
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   align-items: center;
+  gap: 4px;
 }
 .painter-swatches {
   display: flex;
@@ -244,26 +244,22 @@ const PAINTER_CSS = `
   touch-action: pan-x;
 }
 .painter-swatches.can-scroll {
-  mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 28px), transparent);
-  -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 16px), transparent);
+  -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 16px), transparent);
 }
 .painter-swatches::-webkit-scrollbar { display: none; }
 .painter-more {
-  position: absolute;
-  right: 0;
-  top: 50%;
-  width: 28px;
-  height: 28px;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
   margin: 0;
   padding: 0 0 2px;
   border: 1.5px solid var(--line);
   border-radius: 50%;
-  transform: translateY(-50%);
   background: var(--paper);
-  box-shadow: -10px 0 8px var(--paper);
   color: var(--ink);
   font: inherit;
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 640;
   line-height: 1;
 }

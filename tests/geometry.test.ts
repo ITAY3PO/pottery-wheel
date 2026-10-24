@@ -89,4 +89,49 @@ describe('attachment tube', () => {
     };
     expect(radiusOf(0)).toBeGreaterThan(radiusOf(10) * 1.15);
   });
+
+  it('winds the outside of the tube toward the viewer', () => {
+    const attachment = createAttachment({
+      kind: 'handle',
+      joinBlend: 0,
+      tubularSegments: 4,
+      radialSegments: 8,
+      points: [
+        { x: 0, y: 0, z: 0, radius: 0.02 },
+        { x: 0, y: 0.12, z: 0, radius: 0.02 },
+      ],
+    });
+    const geometry = buildAttachmentGeometry(attachment);
+    const position = geometry.getAttribute('position');
+    const index = geometry.getIndex();
+    expect(index).toBeTruthy();
+    let best = -Infinity;
+    let outward = 0;
+    for (let triangle = 0; index && triangle < index.count; triangle += 3) {
+      const a = index.getX(triangle);
+      const b = index.getX(triangle + 1);
+      const c = index.getX(triangle + 2);
+      const ax = position.getX(a);
+      const ay = position.getY(a);
+      const az = position.getZ(a);
+      const bx = position.getX(b);
+      const by = position.getY(b);
+      const bz = position.getZ(b);
+      const cx = position.getX(c);
+      const cy = position.getY(c);
+      const cz = position.getZ(c);
+      const mx = (ax + bx + cx) / 3;
+      const mz = (az + bz + cz) / 3;
+      const nx = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
+      const ny = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
+      const nz = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+      const along = nx * mx + ny * 0 + nz * mz;
+      if (mx > best) {
+        best = mx;
+        outward = along;
+      }
+    }
+    expect(best).toBeGreaterThan(0.01);
+    expect(outward).toBeGreaterThan(0);
+  });
 });

@@ -121,14 +121,29 @@ function applyRawFinish(material: MeshPhysicalMaterial): void {
  * the albedo. Keep the clay dielectric and let the glaze shader supply the color.
  */
 export function dressAttachmentMaterial(material: MeshPhysicalMaterial): void {
-  material.metalness = 0;
-  material.vertexColors = false;
-  material.sheen = 0;
-  material.envMapIntensity = Math.min(material.envMapIntensity, 0.4);
+  let changed = false;
+  if (material.metalness !== 0) {
+    material.metalness = 0;
+    changed = true;
+  }
+  if (material.vertexColors) {
+    material.vertexColors = false;
+    changed = true;
+  }
+  if (material.sheen !== 0) {
+    material.sheen = 0;
+    changed = true;
+  }
+  if (material.envMapIntensity > 0.4) {
+    material.envMapIntensity = 0.4;
+    changed = true;
+  }
   if (material.clearcoat > 0.4) {
     material.clearcoat = 0.4;
     material.clearcoatRoughness = Math.max(material.clearcoatRoughness, 0.18);
+    changed = true;
   }
+  if (changed) material.needsUpdate = true;
 }
 
 /** Where a coat breaks to its edge color. Full coats stay at 0; thin coats approach `breakStrength`. */
@@ -145,12 +160,21 @@ export function glazeBreakAmount(thicknessMm: number, breakStrength: number, edg
   return Math.min(1, Math.max(0, thin * breakStrength * along));
 }
 
+function assignGlazeUniform(shader: ClayShader, name: string, value: unknown): void {
+  const slot = shader.uniforms[name];
+  if (slot) slot.value = value;
+  else shader.uniforms[name] = { value };
+}
+
 function glazeHook(shader: ClayShader): void {
   studioShaders.add(shader);
-  shader.uniforms.uPwColor = { value: colorTex };
-  shader.uniforms.uPwParams = { value: paramsTex };
-  shader.uniforms.uPwFire = { value: currentFire };
-  shader.uniforms.uPwCurvScale = { value: 0.03 };
+  assignGlazeUniform(shader, 'uPwColor', colorTex);
+  assignGlazeUniform(shader, 'uPwParams', paramsTex);
+  assignGlazeUniform(shader, 'uPwCurvScale', 0.03);
+  if (!pinnedFire.has(shader)) assignGlazeUniform(shader, 'uPwFire', currentFire);
+  else assignGlazeUniform(shader, 'uPwFire', pinnedFire.get(shader));
+
+  if (shader.fragmentShader.includes('uniform float uPwFire')) return;
 
   const vertex = shader.vertexShader;
   const fragment = shader.fragmentShader;
@@ -297,10 +321,13 @@ if (uPwFire > -0.5 && uPwFire < 0.5) {
 `;
 
 const COAT_GLSL = /* glsl */ `
+#ifdef USE_CLEARCOAT
 if (uPwFire > -0.5 && uPwFire < 0.5) {
   material.clearcoat = 0.02;
   material.clearcoatRoughness = 0.8;
-} else if (uPwFire > 0.5) {
+}
+#endif
+if (uPwFire > 0.5) {
   material.metalness = 0.0;
 }
 `;
