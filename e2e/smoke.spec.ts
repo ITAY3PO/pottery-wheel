@@ -258,6 +258,38 @@ test('throws, trims, handles, fires, and opens a share link', async ({ page }) =
   await expect(page.getByText('A shared pot')).toBeVisible();
 });
 
+test('water then a short press does not balloon the wall', async ({ page }) => {
+  await page.setViewportSize({ width: 412, height: 924 });
+  await page.goto('/pottery-wheel/?debug');
+  const wheel = pottery(page);
+  await wheel.ready();
+
+  await page.getByRole('button', { name: 'Sit down and throw' }).click();
+  const skip = page.locator('[data-skip]');
+  try {
+    await skip.waitFor({ state: 'visible', timeout: 4000 });
+    await skip.click();
+  } catch {
+    // The tutorial is already dismissed in this profile.
+  }
+
+  await page.locator('[data-start]').click();
+  await clickTool(page, 'water');
+  const y = 0.045;
+  const edge = await wheel.edge(y);
+  await hold(page, await wheel.project(Math.max(edge * 0.62, 0.02), y), 180);
+
+  await clickTool(page, 'press');
+  const before = await wheel.edge(y);
+  expect(before).toBeGreaterThan(0.02);
+  const pressed = await wheel.edge(y);
+  await hold(page, await wheel.project(Math.max(pressed * 0.62, 0.02), y), 300);
+  const after = await wheel.edge(y);
+  // A side press eases the wall in. It must not jump outward.
+  expect(after).toBeLessThan(before + 0.004);
+  expect(after).toBeGreaterThan(0.02);
+});
+
 test('a share link opens the pot without a tap', async ({ page }) => {
   const encoded = await encodeShare(createPiece('stoneware', 1));
   expect(encoded?.hash.startsWith('p1.')).toBe(true);

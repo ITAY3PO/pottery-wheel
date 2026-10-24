@@ -61,8 +61,9 @@ export function evaluateIntegrity(grid: ClayGrid, clay: ClayType, dt: number): I
 
   let slumped = false;
   if (grid.stress > 12 && moisture > 0.68) {
-    applySlump(grid);
-    grid.stress = 2;
+    // Sag with dt. A full belly jump in one frame is what a water click felt like.
+    applySlump(grid, step);
+    grid.stress = Math.max(2, grid.stress - step * 6);
     slumped = true;
   }
 
@@ -86,21 +87,27 @@ function representativeThickness(grid: ClayGrid): number {
   return n === 0 ? 0.01 : thick / n;
 }
 
-function applySlump(grid: ClayGrid): void {
+/** Portion of a full slump per second, so 30 fps and 120 fps sag the same distance. */
+const SLUMP_RATE = 0.45;
+
+function applySlump(grid: ClayGrid, dt: number): void {
+  const step = Math.min(Math.max(dt, 0), 0.25);
+  const amount = 1 - Math.exp(-step * SLUMP_RATE);
+  if (amount <= 1e-6) return;
   const target = volume(grid);
   const n = grid.rings;
   for (let r = 0; r < n; r++) {
     const t = r / (n - 1);
     const belly = Math.exp(-((t - 0.42) ** 2) / 0.018);
-    const k = 1 + 0.14 * belly;
+    const k = 1 + 0.14 * belly * amount;
     const base = r * grid.segments;
     for (let s = 0; s < grid.segments; s++) {
       const i = base + s;
       grid.outer[i] *= k;
-      if (grid.inner[i] > 0.001) grid.inner[i] *= 1 + 0.1 * belly;
+      if (grid.inner[i] > 0.001) grid.inner[i] *= 1 + 0.1 * belly * amount;
     }
   }
-  scaleGaps(grid, 0, 0.84);
+  scaleGaps(grid, 0, 1 - 0.16 * amount);
   sanitizeGrid(grid);
   const now = volume(grid);
   if (now > 1e-12) scaleRadii(grid, Math.sqrt(target / now));

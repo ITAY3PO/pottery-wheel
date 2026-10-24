@@ -112,6 +112,8 @@ const shell = new Shell(app, {
     if (piece) piece.speedSetting = wheel.speed;
   },
   onTool: (id) => {
+    // A finger still down from water must not keep shaping as the next tool.
+    if (id !== activeToolId && toolDown) endStroke();
     activeToolId = id;
     wireWarned = false;
     publish();
