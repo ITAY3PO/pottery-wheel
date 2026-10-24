@@ -108,7 +108,7 @@ Shaping entry points, all pure and unit-tested: `centerClay`, `pressIn`, `openCe
 
 `v` is arc length along the mean profile. `u` is angle. Interior vertices are slightly darker; torn samples are marked in the vertex color.
 
-The studio is one warm directional light plus a `RoomEnvironment` PMREM. The PMREM build is deferred (`requestIdleCallback`, timeout 1200ms) so the first frames use the key light only. Wet clay is a `MeshPhysicalMaterial` (low roughness, high clearcoat, a little sheen).
+The studio is one warm directional light plus a `RoomEnvironment` PMREM. The PMREM build is deferred (`requestIdleCallback`, timeout 1200ms) so the first frames use the key light only. The Three.js boot chunk itself loads on the first tap, or about five seconds later, so the wordmark paints before that work. Wet clay is a `MeshPhysicalMaterial` (low roughness, high clearcoat, a little sheen). The render loop stops when the wheel is still and no finger is down, and starts again for a press, a spin, or a short camera ease.
 
 `src/render/quality.ts` picks a render budget. The simulation grid stays full; only the drawn mesh is decimated.
 

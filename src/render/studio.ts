@@ -82,6 +82,7 @@ export class Studio {
   private viewWidth = 1;
   private viewHeight = 1;
   private environmentReady = false;
+  private environmentListener: (() => void) | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     const profile = currentProfile();
@@ -449,6 +450,12 @@ export class Studio {
   }
 
   /** PMREM is a long task. The first frames render with the key light alone. */
+  /** One shot after the deferred room map is uploaded, so the loop can stay stopped. */
+  whenEnvironmentReady(listener: () => void): void {
+    this.environmentListener = listener;
+    if (this.environmentReady) listener();
+  }
+
   private scheduleEnvironment(): void {
     const build = () => {
       if (this.environmentReady) return;
@@ -456,6 +463,7 @@ export class Studio {
       const pmrem = new PMREMGenerator(this.renderer);
       this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
       pmrem.dispose();
+      this.environmentListener?.();
     };
     const idle = window.requestIdleCallback;
     if (typeof idle === 'function') idle(() => build(), { timeout: 1200 });

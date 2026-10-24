@@ -83,6 +83,19 @@ try {
       const audit = result.lhr.audits[id];
       if (audit) console.log(`${id}: ${audit.displayValue} (score ${audit.score})`);
     }
+    const diagnostics = result.lhr.audits.diagnostics;
+    if (diagnostics?.numericValue != null) console.log(`diagnostics: ${diagnostics.displayValue}`);
+    for (const id of ['bootup-time', 'mainthread-work-breakdown', 'long-tasks']) {
+      const audit = result.lhr.audits[id];
+      const items = audit?.details?.items;
+      if (!items) continue;
+      console.log(id);
+      for (const item of items.slice(0, 8)) {
+        const label = item.url || item.group || item.groupLabel || '';
+        const ms = item.total ?? item.duration ?? item.scripting;
+        console.log(`  ${label} ${ms ?? ''}`.trim());
+      }
+    }
     if (score < 0.9) {
       console.error(`Performance score ${percent} is below 90.`);
       exitCode = 1;

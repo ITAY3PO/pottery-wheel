@@ -13,6 +13,9 @@ interface JoinPrep {
 function pottery(page: Page) {
   return {
     async ready(): Promise<void> {
+      await page.evaluate(() => {
+        window.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      });
       await page.waitForFunction(() => {
         const app = (window as unknown as { __pottery?: { project?: unknown } }).__pottery;
         return typeof app?.project === 'function';
@@ -75,6 +78,20 @@ async function hold(page: Page, point: Point, ms: number): Promise<void> {
   await page.mouse.down();
   await page.waitForTimeout(ms);
   await page.mouse.up();
+  await page.waitForTimeout(40);
+}
+
+/** A tap has to stay down across a frame. The tools apply on the sim tick, not the event. */
+async function tapClay(page: Page): Promise<void> {
+  const canvas = await page.getByRole('application').boundingBox();
+  const sheet = await page.locator('#app > .sheet-chrome').boundingBox();
+  if (!canvas) throw new Error('Missing canvas');
+  const aboveSheet = sheet ? sheet.y - 30 : canvas.y + canvas.height * 0.4;
+  const point = {
+    x: canvas.x + canvas.width * 0.55,
+    y: Math.max(canvas.y + 140, Math.min(canvas.y + canvas.height * 0.38, aboveSheet)),
+  };
+  await hold(page, point, 120);
 }
 
 async function clickTool(page: Page, id: string): Promise<void> {
@@ -186,11 +203,10 @@ test('throws, trims, handles, fires, and opens a share link', async ({ page }) =
   await drag(page, handleStart, handleEnd, 16);
   await expect.poll(() => wheel.attachments()).toBeGreaterThan(0);
 
-  const handlePoint = await wheel.project(0.048, 0.07);
   await clickTool(page, 'score');
-  await page.mouse.click(handlePoint.x, handlePoint.y);
+  await tapClay(page);
   await clickTool(page, 'slip');
-  await page.mouse.click(handlePoint.x, handlePoint.y);
+  await tapClay(page);
   await expect.poll(async () => {
     const join = await wheel.join();
     return join.scored && join.slipped;

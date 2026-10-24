@@ -165,14 +165,41 @@ onboarding = new Onboarding({
   onLayout: () => resize(),
 });
 
+let scheduled = false;
+let warmed = false;
+let aliveUntil = 0;
+
+/** Draw again soon. A settled scene does not keep the main thread busy. */
+function scheduleFrame(): void {
+  if (scheduled) return;
+  scheduled = true;
+  requestAnimationFrame((now) => {
+    scheduled = false;
+    frame(now);
+  });
+}
+
+/** Keep simulating while a press, a spin, or a short ease is in progress. */
+function wake(ms: number): void {
+  aliveUntil = Math.max(aliveUntil, performance.now() + ms);
+  scheduleFrame();
+}
+
 const views = new ViewBar(app, (preset) => {
   studio.rig.setPreset(preset);
   views.setActive(preset);
+  wake(1400);
 });
 views.setActive(studio.rig.preset);
 
-window.addEventListener('resize', () => resize());
-new ResizeObserver(() => resize()).observe(app);
+window.addEventListener('resize', () => {
+  resize();
+  scheduleFrame();
+});
+new ResizeObserver(() => {
+  resize();
+  scheduleFrame();
+}).observe(app);
 resize();
 studio.applyQuality(currentProfile());
 shell.setQuality(currentProfile());
@@ -197,7 +224,8 @@ bindFiringApp({
   },
 });
 bindGlazeFrame();
-requestAnimationFrame(frame);
+studio.whenEnvironmentReady(() => scheduleFrame());
+scheduleFrame();
 
 canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 canvas.addEventListener('pointerdown', onPointerDown);
@@ -240,7 +268,7 @@ function frame(now: number): void {
     studio.showTrimChips(chips);
     studio.render(elapsed);
     events.emit('frame', { dt: elapsed, piece: null });
-    requestAnimationFrame(frame);
+    if (chips.length > 0 || performance.now() < aliveUntil) scheduleFrame();
     return;
   }
 
@@ -293,7 +321,10 @@ function frame(now: number): void {
       onboarding.sync(piece);
     }
   }
-  requestAnimationFrame(frame);
+  const spinning = wheel.running || Math.abs(wheel.omega) > 0.04;
+  if (toolDown || orbiting || rightOrbit || spinning || chips.length > 0 || performance.now() < aliveUntil) {
+    scheduleFrame();
+  }
 }
 
 function applyStroke(dt: number, now: number, sample: StrokeSample | null, surfaceHit: SurfaceHit | null): void {
@@ -366,7 +397,10 @@ function canOrbit(): boolean {
 
 function onPointerDown(event: PointerEvent): void {
   if (event.button === 2) {
-    if (canOrbit()) rightOrbit = true;
+    if (canOrbit()) {
+      rightOrbit = true;
+      scheduleFrame();
+    }
     return;
   }
   if (event.button !== 0) return;
@@ -375,14 +409,19 @@ function onPointerDown(event: PointerEvent): void {
   if (pointers.size >= 2 && canOrbit()) {
     endStroke();
     orbiting = true;
+    scheduleFrame();
     return;
   }
-  if (orbiting || !piece || !currentTool()) return;
+  if (orbiting || !piece || !currentTool()) {
+    scheduleFrame();
+    return;
+  }
   latest = { x: event.clientX, y: event.clientY };
   toolDown = true;
   needsDown = true;
   previous = null;
   lastSample = null;
+  scheduleFrame();
 }
 
 function onPointerMove(event: PointerEvent): void {
@@ -391,6 +430,7 @@ function onPointerMove(event: PointerEvent): void {
   if (rightOrbit && canOrbit()) {
     studio.rig.orbitBy(event.movementX, event.movementY);
     views.setActive(studio.rig.preset);
+    scheduleFrame();
     return;
   }
   if (!previousPoint) return;
@@ -400,9 +440,13 @@ function onPointerMove(event: PointerEvent): void {
   if (orbiting && pointers.size >= 2) {
     studio.rig.orbitBy(dx, dy);
     views.setActive(studio.rig.preset);
+    scheduleFrame();
     return;
   }
-  if (toolDown && !orbiting) latest = { x: event.clientX, y: event.clientY };
+  if (toolDown && !orbiting) {
+    latest = { x: event.clientX, y: event.clientY };
+    scheduleFrame();
+  }
 }
 
 function onPointerUp(event: PointerEvent): void {
@@ -410,6 +454,7 @@ function onPointerUp(event: PointerEvent): void {
   if (event.button === 2) rightOrbit = false;
   if (pointers.size < 2) orbiting = false;
   if (pointers.size === 0) endStroke();
+  scheduleFrame();
 }
 
 function endStroke(): void {
@@ -602,6 +647,10 @@ function publish(): void {
   shell.render(view);
   onboarding.sync(piece);
   resize();
+  // The first paint is one frame. Later changes ease the camera and the lift.
+  if (warmed) wake(1400);
+  else warmed = true;
+  scheduleFrame();
 }
 
 function currentStage(): Stage | undefined {
