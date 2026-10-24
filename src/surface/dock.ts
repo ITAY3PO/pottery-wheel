@@ -36,7 +36,10 @@ export function mountPainter(): void {
   dock.innerHTML = `
     <div class="painter-row">
       <button class="painter-wax" type="button" data-wax aria-pressed="false">Wax</button>
-      <div class="painter-swatches" role="listbox" aria-label="Glazes"></div>
+      <div class="painter-swatch-wrap">
+        <div class="painter-swatches" role="listbox" aria-label="Glazes"></div>
+        <button class="painter-more" type="button" aria-label="More glazes" hidden>›</button>
+      </div>
       <div class="painter-sizes" role="group" aria-label="Brush size">${sizes}</div>
     </div>
   `;
@@ -74,6 +77,14 @@ export function mountPainter(): void {
       ringSize();
     });
   });
+
+  const swatches = dock.querySelector('.painter-swatches') as HTMLElement;
+  const more = dock.querySelector('.painter-more') as HTMLButtonElement;
+  more.addEventListener('click', () => {
+    swatches.scrollBy({ left: 104, behavior: 'smooth' });
+  });
+  swatches.addEventListener('scroll', () => markSwatchOverflow(swatches, more), { passive: true });
+  window.addEventListener('resize', () => markSwatchOverflow(swatches, more));
 
   const ring = document.createElement('div');
   ring.className = 'brush-ring';
@@ -125,16 +136,28 @@ export function mountPainter(): void {
     const bisque = root.getAttribute('data-stage') === 'bisque';
     const bar = sheet.querySelector(':scope > .painter-bar');
     if (!bisque) {
-      if (bar instanceof HTMLElement && actions.parentElement === bar) bar.replaceWith(actions);
+      if (bar instanceof HTMLElement) {
+        const parked = bar.querySelector(':scope > .tools');
+        if (parked) bar.after(parked);
+        if (actions.parentElement === bar) bar.replaceWith(actions);
+        else bar.remove();
+      }
       return;
     }
+    const tools = sheet.querySelector('.tools');
     const host = bar instanceof HTMLElement ? bar : document.createElement('div');
     host.className = 'painter-bar';
-    if (host.parentElement !== sheet || actions.parentElement !== host || dock.parentElement !== host || dock.previousElementSibling !== actions) {
+    const toolsReady = !(tools instanceof HTMLElement) || (tools.parentElement === host && tools.previousElementSibling === dock);
+    if (host.parentElement !== sheet || actions.parentElement !== host || dock.parentElement !== host || dock.previousElementSibling !== actions || !toolsReady) {
       if (host.parentElement !== sheet) sheet.prepend(host);
-      host.append(actions, dock);
+      const nodes: Node[] = [actions, dock];
+      if (tools instanceof HTMLElement) nodes.push(tools);
+      host.append(...nodes);
       window.dispatchEvent(new Event('resize'));
     }
+    const row = dock.querySelector('.painter-swatches');
+    const moreGlazes = dock.querySelector('.painter-more');
+    if (row instanceof HTMLElement && moreGlazes instanceof HTMLButtonElement) markSwatchOverflow(row, moreGlazes);
   };
   const observer = new MutationObserver(place);
   observer.observe(root, { childList: true, subtree: true });
@@ -153,6 +176,13 @@ function sync(dock: HTMLElement): void {
   dock.querySelectorAll<HTMLButtonElement>('.painter-size').forEach((button) => {
     button.setAttribute('aria-pressed', button.dataset.size === step ? 'true' : 'false');
   });
+}
+
+function markSwatchOverflow(row: HTMLElement, more: HTMLButtonElement): void {
+  const leftover = row.scrollWidth - row.clientWidth - row.scrollLeft;
+  const canScroll = leftover > 6;
+  row.classList.toggle('can-scroll', canScroll);
+  more.hidden = !canScroll;
 }
 
 function brushStep(size: number): string {
@@ -196,6 +226,13 @@ const PAINTER_CSS = `
   color: var(--paper);
   border-color: var(--ink);
 }
+.painter-swatch-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 .painter-swatches {
   display: flex;
   gap: 8px;
@@ -206,7 +243,27 @@ const PAINTER_CSS = `
   scrollbar-width: none;
   touch-action: pan-x;
 }
+.painter-swatches.can-scroll {
+  mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 16px), transparent);
+  -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 16px), transparent);
+}
 .painter-swatches::-webkit-scrollbar { display: none; }
+.painter-more {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0 0 2px;
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-size: 22px;
+  font-weight: 640;
+  line-height: 1;
+}
+.painter-more[hidden] { display: none; }
 .painter-swatch {
   width: 44px;
   height: 44px;

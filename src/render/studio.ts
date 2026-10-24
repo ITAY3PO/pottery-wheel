@@ -25,6 +25,7 @@ import {
 } from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { getClay } from '../clay/clays';
+import { dressAttachmentMaterial } from '../firing/look';
 import { maxOuterAtRing, pieceHeight } from '../clay/grid';
 import type { Attachment, MeshSurface, PieceState, SurfaceHit } from '../core/types';
 import { buildAttachmentGeometry } from './attachmentMesh';
@@ -169,8 +170,10 @@ export class Studio {
     this.clayMesh.update(piece.grid);
     if (this.finishStage !== piece.stage || this.finishClay !== piece.clayTypeId) {
       const clay = getClay(piece.clayTypeId);
-      for (const material of clayMaterialsSharingHooks(this.ensureBodyMaterial())) {
+      const bodyMaterial = this.ensureBodyMaterial();
+      for (const material of clayMaterialsSharingHooks(bodyMaterial)) {
         applyClayFinish(material, clay, piece.stage);
+        if (material !== bodyMaterial) dressAttachmentMaterial(material);
       }
       this.finishStage = piece.stage;
       this.finishClay = piece.clayTypeId;
@@ -300,6 +303,14 @@ export class Studio {
     if (body) this.ensureTextures(this.clayMesh.mesh, body);
   }
 
+  /** Dress and point glaze uniforms at this mesh. Runs for a new mesh and for a geometry-only update. */
+  private bindAttachmentMaterial(mesh: Mesh): void {
+    const material = mesh.material;
+    if (Array.isArray(material) || !(material instanceof MeshPhysicalMaterial)) return;
+    if (material !== this.bodyMaterial) dressAttachmentMaterial(material);
+    bindSurfaceUniforms(mesh);
+  }
+
   private ensureTextures(mesh: Mesh, surface: MeshSurface): void {
     let textures = this.surfaceCache.get(surface.meshId);
     if (textures && !surfaceTexturesMatch(textures, surface.map)) {
@@ -335,13 +346,14 @@ export class Studio {
           this.releaseAttachment(mesh);
           this.attachmentMeshes.delete(attachment.id);
         }
-        mesh = new Mesh(buildAttachmentGeometry(attachment), cloneClayMaterial(this.ensureBodyMaterial()));
-        bindSurfaceUniforms(mesh);
+        const material = cloneClayMaterial(this.ensureBodyMaterial());
+        mesh = new Mesh(buildAttachmentGeometry(attachment), material);
         mesh.userData.signature = signature;
         mesh.userData.meshId = attachment.id;
         this.attachmentRoot.add(mesh);
         this.attachmentMeshes.set(attachment.id, mesh);
       }
+      this.bindAttachmentMaterial(mesh);
       const surface = piece.surfaces.find((entry) => entry.meshId === attachment.id);
       if (surface && mesh) this.ensureTextures(mesh, surface);
     }

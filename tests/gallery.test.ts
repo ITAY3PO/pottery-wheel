@@ -196,6 +196,8 @@ describe('gallery storage', () => {
     expect(handle.userData.pwFire).toBe(1);
     expect(body.userData.pwFiredMeshId).toBe('body');
     expect(handle.userData.pwFiredMeshId).toBe('gallery-handle');
+    expect(handle.metalness).toBe(0);
+    expect(handle.vertexColors).toBe(false);
     applyTurntableMaterials(body, handle, piece);
     expect(String(body.userData.hookKey)).toBe('clay|glaze-fire');
 

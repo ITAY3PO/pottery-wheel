@@ -17,7 +17,9 @@ export function buildAttachmentGeometry(attachment: Attachment): BufferGeometry 
   if (attachment.points.length < 2) {
     geometry.setAttribute('position', new Float32BufferAttribute([0, 0, 0], 3));
     geometry.setAttribute('normal', new Float32BufferAttribute([0, 1, 0], 3));
-    geometry.setAttribute('uv', new Float32BufferAttribute([0, 0], 2));
+    const uv = new Float32BufferAttribute([0, 0], 2);
+    uv.name = 'uv';
+    geometry.setAttribute('uv', uv);
     return geometry;
   }
 
@@ -77,17 +79,19 @@ export function buildAttachmentGeometry(attachment: Attachment): BufferGeometry 
       const c = a + cols;
       const d = c + 1;
       indices[w++] = a;
-      indices[w++] = c;
-      indices[w++] = b;
       indices[w++] = b;
       indices[w++] = c;
+      indices[w++] = b;
       indices[w++] = d;
+      indices[w++] = c;
     }
   }
 
   geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
   geometry.setAttribute('normal', new Float32BufferAttribute(normals, 3));
-  geometry.setAttribute('uv', new Float32BufferAttribute(uvs, 2));
+  const uv = new Float32BufferAttribute(uvs, 2);
+  uv.name = 'uv';
+  geometry.setAttribute('uv', uv);
   geometry.setIndex(new Uint32BufferAttribute(indices, 1));
   return geometry;
 }
