@@ -1,10 +1,8 @@
-/**
- * STUB — firing agent.
- * Bone-dry clay is ready for the bisque kiln. Call `transition(piece, 'bisque')`
- * from src/firing when the kiln cycle finishes. Do not skip the kiln UI by
- * adding a one-click fire button here unless that cycle is the real one.
- */
 import type { Stage } from '../core/types';
+import { firingChoice } from '../firing/choice';
+import { coneById } from '../firing/cones';
+import { isKilnRunning, startKiln } from '../firing/kiln';
+import { lastFiringNote } from '../firing/outcome';
 
 export const stage: Stage = {
   id: 'bone-dry',
@@ -12,5 +10,33 @@ export const stage: Stage = {
   order: 30,
   mountsOnWheel: false,
   allowOrbit: true,
-  hint: () => 'Bone-dry and fragile. The bisque kiln comes next.',
+  hint: () => {
+    if (lastFiringNote) return lastFiringNote;
+    const cone = coneById(firingChoice.bisqueCone, 'bisque');
+    return `Bone-dry. Bisque fire at cone ${cone.label}, ${cone.tempC}°C.`;
+  },
+  actions: [
+    {
+      id: 'cone-06',
+      label: 'Cone 06',
+      run: () => {
+        firingChoice.bisqueCone = '06';
+      },
+    },
+    {
+      id: 'cone-04',
+      label: 'Cone 04',
+      run: () => {
+        firingChoice.bisqueCone = '04';
+      },
+    },
+    {
+      id: 'fire-bisque',
+      label: 'Fire bisque',
+      enabled: () => !isKilnRunning(),
+      run: (ctx) => {
+        startKiln(ctx.piece, 'bisque');
+      },
+    },
+  ],
 };

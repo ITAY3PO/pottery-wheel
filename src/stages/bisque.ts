@@ -1,11 +1,12 @@
-/**
- * STUB — surface agent.
- * Bisque is porous and takes glaze and underglaze. Paint into the body
- * MeshSurface (glazeId, thickness, underglazeId) from `ctx.surfaceHit`.
- * Wax resist sets the wax texel. Call `ctx.markSurfaceDirty(meshId)`.
- * Then `transition(piece, 'glazed')`.
- */
+import { transition } from '../core/stateMachine';
 import type { Stage } from '../core/types';
+import { getGlaze } from '../surface/catalog';
+import { dipPiece, pourPiece } from '../surface/coat';
+import { markPieceSurfaces } from '../surface/dirty';
+import { mountPainter } from '../surface/dock';
+import { painter } from '../surface/session';
+
+if (typeof document !== 'undefined') mountPainter();
 
 export const stage: Stage = {
   id: 'bisque',
@@ -13,5 +14,36 @@ export const stage: Stage = {
   order: 40,
   mountsOnWheel: false,
   allowOrbit: true,
-  hint: () => 'Bisque. Glaze and wax resist belong on this surface.',
+  hint: () => {
+    if (painter.mode === 'wax') {
+      return 'Wax resist. Paint where the glaze should pull away. It toasts bare in the kiln.';
+    }
+    const name = getGlaze(painter.glazeId).name;
+    return `${name}. Brush it on, or dip and pour. The real color waits for the kiln.`;
+  },
+  actions: [
+    {
+      id: 'dip',
+      label: 'Dip',
+      run: (ctx) => {
+        dipPiece(ctx.piece);
+        markPieceSurfaces(ctx.piece);
+      },
+    },
+    {
+      id: 'pour',
+      label: 'Pour',
+      run: (ctx) => {
+        pourPiece(ctx.piece);
+        markPieceSurfaces(ctx.piece);
+      },
+    },
+    {
+      id: 'finish-glaze',
+      label: 'Coat is done',
+      run: (ctx) => {
+        transition(ctx.piece, 'glazed');
+      },
+    },
+  ],
 };

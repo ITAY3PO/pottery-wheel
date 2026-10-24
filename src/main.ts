@@ -17,6 +17,10 @@ import { Shell, type ShellModel } from './ui/shell/shell';
 import { ViewBar } from './ui/views';
 import { Wheel } from './core/wheel';
 import { installAudio } from './audio';
+import { bindFiringApp } from './firing/kiln';
+import { refreshGlazeLook } from './firing/look';
+import { bindSurfaceDirty } from './surface/dirty';
+import { bindPainter } from './surface/session';
 
 const app = document.querySelector('#app');
 if (!(app instanceof HTMLElement)) throw new Error('Missing #app');
@@ -159,6 +163,17 @@ installAudio({
 });
 const mute = document.getElementById('pw-mute');
 if (mute) shell.topbar.append(mute);
+bindSurfaceDirty((meshId) => studio.markSurfaceDirty(meshId));
+bindPainter({
+  piece: () => piece,
+  publish: () => afterChange(),
+});
+bindFiringApp({
+  onChange: (message) => {
+    if (message) toast(message);
+    afterChange();
+  },
+});
 requestAnimationFrame(frame);
 
 canvas.addEventListener('contextmenu', (event) => event.preventDefault());
@@ -218,6 +233,7 @@ function frame(now: number): void {
     if (integrity.slumped) toast('The clay slumped — too wet, and too tall.');
   }
   studio.syncPiece(piece);
+  refreshGlazeLook(piece);
   studio.spin(wheel.angle, piece.onWheel, elapsed);
   updateCursor();
   studio.showTrimChips(chips);
@@ -276,6 +292,11 @@ function applyStroke(dt: number, now: number, sample: StrokeSample | null, surfa
 function updateCursor(): void {
   const toolId = currentTool()?.id ?? '';
   if (!piece || !toolDown || !latest || !toolId) {
+    studio.showContact(false, 0, 0, 0);
+    studio.showWire(false, 0, 0);
+    return;
+  }
+  if (toolId === 'glaze-brush') {
     studio.showContact(false, 0, 0, 0);
     studio.showWire(false, 0, 0);
     return;
@@ -525,6 +546,7 @@ function afterChange(): void {
   if (!available.some((tool) => tool.id === activeToolId)) activeToolId = available[0]?.id ?? null;
   confirmDiscard = false;
   studio.syncPiece(piece);
+  refreshGlazeLook(piece);
   savePiece(piece);
   publish();
 }
