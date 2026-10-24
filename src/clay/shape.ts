@@ -1,5 +1,6 @@
 import type { ClayType } from './clays';
 import { minWallThickness } from './clays';
+import { deformRateScale } from './wetness';
 import {
   clayIndex,
   clamp,
@@ -44,15 +45,15 @@ function withHand(grid: ClayGrid, stroke: Stroke, fn: (segment: number, weight: 
   eachContacted(grid.segments, stroke.segment, 0, stroke.dt, fn);
 }
 
-function framePush(stroke: Stroke, handSpeed: number): number {
-  if (stroke.pressure <= 0.01) return 0;
+function framePush(stroke: Stroke, handSpeed: number, stress = 0): number {
+  if (stroke.pressure <= 0.01 || !(stroke.dt > 0)) return 0;
   const cover = spinning(stroke) ? 0.72 : 1;
-  return handSpeed * stroke.pressure * cover * stroke.dt;
+  return handSpeed * stroke.pressure * cover * stroke.dt * deformRateScale(stress);
 }
 
-function frameBlend(stroke: Stroke, ratePerSecond: number): number {
-  if (stroke.pressure <= 0.01) return 0;
-  const rate = spinning(stroke) ? ratePerSecond : ratePerSecond * 0.35;
+function frameBlend(stroke: Stroke, ratePerSecond: number, stress = 0): number {
+  if (stroke.pressure <= 0.01 || !(stroke.dt > 0)) return 0;
+  const rate = (spinning(stroke) ? ratePerSecond : ratePerSecond * 0.35) * deformRateScale(stress);
   return clamp(1 - Math.exp(-rate * stroke.dt * Math.max(0.2, stroke.pressure)), 0, 0.65);
 }
 
@@ -97,8 +98,8 @@ export function centerClay(grid: ClayGrid, height: number, stroke: Stroke, clay:
   const round = spinning(stroke);
   const band = round ? grid.rings : Math.max(3, Math.round(grid.rings * 0.07));
   const minW = minWallThickness(clay);
-  const blend = frameBlend(stroke, round ? 4.4 : 3.1);
-  const inward = framePush(stroke, round ? 0.016 : 0.02);
+  const blend = frameBlend(stroke, round ? 4.4 : 3.1, grid.stress);
+  const inward = framePush(stroke, round ? 0.016 : 0.02, grid.stress);
   if (blend <= 0 && inward <= 0) return;
 
   const influence = round ? Math.max(6, Math.round(grid.rings * 0.22)) : band;
@@ -131,7 +132,7 @@ export function pressIn(grid: ClayGrid, height: number, stroke: Stroke, clay: Cl
   const ring = ringAtHeight(grid, height);
   const band = Math.max(3, Math.round(grid.rings * 0.055));
   const minW = minWallThickness(clay) * 0.78;
-  const disp = framePush(stroke, 0.045);
+  const disp = framePush(stroke, 0.045, grid.stress);
   if (disp <= 0) return;
 
   for (let r = ring - band; r <= ring + band; r++) {
@@ -146,7 +147,9 @@ export function pressIn(grid: ClayGrid, height: number, stroke: Stroke, clay: Cl
       if (inner > 0.002) grid.inner[i] = Math.max(0, inner - delta * 0.84);
     });
   }
-  smoothVertical(grid.outer, grid.rings, grid.segments, ring - band, ring + band, 0.16);
+  // 0.16 at 60 fps. Scaled by dt so a 30 fps step matches two 60 fps steps.
+  const smooth = 1 - Math.exp(-10.4638 * Math.max(stroke.dt, 0));
+  smoothVertical(grid.outer, grid.rings, grid.segments, ring - band, ring + band, smooth);
   sanitizeGrid(grid);
   conserveByHeight(grid, Math.max(0, ring - band), target);
   touchGrid(grid);
@@ -215,7 +218,7 @@ export function openCenter(
   const midRing = ringAtHeight(grid, (floor + top) * 0.5);
   const meanOuter = Math.max(0.01, meanChannel(grid.outer, midRing, grid.segments));
   const desired = clamp(Math.max(openingRadius, 0.012 * stroke.pressure), 0.008, meanOuter * 0.86);
-  const blend = frameBlend(stroke, 3.4);
+  const blend = frameBlend(stroke, 3.4, grid.stress);
   if (blend <= 0) return;
   const minW = minWallThickness(clay) * 0.7;
 
@@ -315,13 +318,13 @@ function openDown(grid: ClayGrid, hitRadius: number, stroke: Stroke, clay: ClayT
     floorRing + Math.max(2, Math.round((grid.rings - floorRing) * 0.45)),
   );
   const meanOuter = Math.max(0.012, meanChannel(grid.outer, sampleRing, grid.segments));
-  const blend = frameBlend(stroke, 3.8);
+  const blend = frameBlend(stroke, 3.8, grid.stress);
   if (blend <= 0) return;
 
   const above = top0 - grid.y[floorRing];
   const minHeight = Math.max(0.03, meanOuter * 1.05);
   if (above > 0.012 && totalH > minHeight) {
-    const drop = Math.min(above * 0.15, Math.max(0, totalH - minHeight), framePush(stroke, 0.018));
+    const drop = Math.min(above * 0.15, Math.max(0, totalH - minHeight), framePush(stroke, 0.018, grid.stress));
     if (drop > 0) scaleGaps(grid, floorRing, clamp((above - drop) / above, 0.9, 1));
   }
 
