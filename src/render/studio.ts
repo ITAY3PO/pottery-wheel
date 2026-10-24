@@ -5,11 +5,9 @@ import {
   Color,
   CylinderGeometry,
   DirectionalLight,
-  DoubleSide,
   Group,
   OrthographicCamera,
   InstancedMesh,
-  LatheGeometry,
   Mesh,
   Object3D,
   MeshBasicMaterial,
@@ -21,7 +19,6 @@ import {
   SphereGeometry,
   SRGBColorSpace,
   TorusGeometry,
-  Vector2,
   WebGLRenderer,
 } from 'three';
 import { getClay } from '../clay/clays';
@@ -144,7 +141,6 @@ export class Studio {
     this.table = buildTable();
     this.table.receiveShadow = profile.shadows;
     this.scene.add(this.table);
-    this.scene.add(buildPan());
     this.scene.add(this.wheelPivot);
     buildWheelHead(this.wheelPivot, profile.shadows);
     this.clayPivot.add(this.attachmentRoot);
@@ -699,32 +695,6 @@ function buildTable(): Mesh {
   );
   mesh.position.y = -0.085;
   return mesh;
-}
-
-function buildPan(): Mesh {
-  const points = [
-    new Vector2(0.03, -0.055),
-    new Vector2(0.15, -0.058),
-    new Vector2(0.188, -0.03),
-    new Vector2(0.206, 0.008),
-    new Vector2(0.218, 0.03),
-    new Vector2(0.206, 0.044),
-    new Vector2(0.192, 0.02),
-    new Vector2(0.178, -0.02),
-    new Vector2(0.16, -0.046),
-    new Vector2(0.04, -0.048),
-  ];
-  return new Mesh(
-    new LatheGeometry(points, 64),
-    new MeshPhysicalMaterial({
-      color: 0xead7c4,
-      roughness: 0.38,
-      metalness: 0.02,
-      clearcoat: 0.45,
-      clearcoatRoughness: 0.28,
-      side: DoubleSide,
-    }),
-  );
 }
 
 function buildWheelHead(pivot: Group, shadows: boolean): void {
