@@ -11,6 +11,7 @@ import { attachmentWillCrack as crackFromJoin } from '../src/handbuild/join';
 import { drawingPlanePoint, placeSample, readRay, worldToPiece, type HandHit, type HandRay } from '../src/handbuild/place';
 import { handbuildDown, handbuildMove, handbuildUp, resetHandbuild, scoreJoin, slipJoin } from '../src/handbuild/session';
 import {
+  PIECE_LIFT,
   pinchPoints,
   pointOnOuter,
   polylineLength,
@@ -77,7 +78,7 @@ function ctx(
 
 /** Ray from +Z through a piece-local point on the z=0 drawing plane. */
 function rayThrough(point: { x: number; y: number }): HandRay {
-  const worldY = point.y + 0.014;
+  const worldY = point.y + PIECE_LIFT;
   return {
     origin: { x: 0, y: worldY, z: 0.4 },
     direction: { x: point.x, y: 0, z: -0.4 },

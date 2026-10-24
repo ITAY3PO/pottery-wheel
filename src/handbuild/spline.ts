@@ -9,8 +9,8 @@ export interface Vec3 {
 
 export const MIN_TUBE_RADIUS = 0.0022;
 export const MAX_TUBE_RADIUS = 0.014;
-/** Off-wheel lift of the clay pivot in the studio, in meters. */
-export const PIECE_LIFT = 0.014;
+/** Studio pivot lift, meters. The piece sits on the bat, so this stays 0. */
+export const PIECE_LIFT = 0;
 
 export function clonePoint(point: AttachmentPoint): AttachmentPoint {
   return { x: point.x, y: point.y, z: point.z, radius: point.radius };

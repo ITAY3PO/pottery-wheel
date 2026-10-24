@@ -672,7 +672,7 @@ function publish(): void {
   markBeginBusy();
   onboarding.sync(piece);
   resize();
-  // The first paint is one frame. Later changes ease the camera and the lift.
+  // The first paint is one frame. Later changes ease the camera.
   if (warmed) wake(1400);
   else warmed = true;
   scheduleFrame();
@@ -855,6 +855,10 @@ async function startGraphics(): Promise<void> {
           showUpdate: () => openUpdatePrompt(),
           glazeBound: () => studio.glazeUniformBound(),
           environment: () => studio.hasEnvironment(),
+          seatGap: () => {
+            if (!piece) return Number.POSITIVE_INFINITY;
+            return Math.abs(studio.pieceBottomY(piece.grid.y[0]) - studio.batTopY());
+          },
           edge: (height: number, side: number) =>
             piece ? silhouette(piece.grid, height, studio.clayPivot.rotation.y, side >= 0 ? 1 : -1) : 0,
           project(x: number, y: number) {

@@ -263,7 +263,7 @@ interface Attachment {
 }
 ```
 
-`createAttachment` fills defaults. Ids are `att-` plus `crypto.randomUUID()`, with a timestamp fallback when `randomUUID` is missing, so a resumed piece never collides with a counter that restarted at `att-1`. `buildAttachmentGeometry` sweeps a tube along a Catmull-Rom spline with parallel-transport frames. Ends flare (radius × up to 1.55) and flatten slightly so the join can sit in the wall. UVs: **u around the tube, v along the spline**, including the join. The mesh is a child of the clay pivot, so it spins and lifts with the pot. Rebuild only when the point list changes — not per frame.
+`createAttachment` fills defaults. Ids are `att-` plus `crypto.randomUUID()`, with a timestamp fallback when `randomUUID` is missing, so a resumed piece never collides with a counter that restarted at `att-1`. `buildAttachmentGeometry` sweeps a tube along a Catmull-Rom spline with parallel-transport frames. Ends flare (radius × up to 1.55) and flatten slightly so the join can sit in the wall. UVs: **u around the tube, v along the spline**, including the join. The mesh is a child of the clay pivot, so it spins with the pot. Rebuild only when the point list changes — not per frame.
 
 `src/handbuild/handles.ts` exports `attachHandle(piece, attachment)`, which checks `canAttachHandle` and calls `ensureAttachmentSurface`. Replace that stub with the real handle/coil interaction; keep the `Attachment` fields.
 
@@ -295,7 +295,7 @@ Helpers:
 
 ## Wheel
 
-`Wheel` in `src/core/wheel.ts`: `omega` (rad/s), `angle`, `running`, `speed` (0..1 knob, up to ~248 rpm). Motor torque is limited; viscous and coulomb friction coast it down; `addDrag(pressure)` is opposing torque consumed on the next `step`. The head mesh uses `angle`. The clay uses `angle` only while `piece.onWheel`; after the wire it keeps the release angle and eases up off the bat.
+`Wheel` in `src/core/wheel.ts`: `omega` (rad/s), `angle`, `running`, `speed` (0..1 knob, up to ~248 rpm). Motor torque is limited; viscous and coulomb friction coast it down; `addDrag(pressure)` is opposing torque consumed on the next `step`. The head mesh uses `angle`. The clay uses `angle` only while `piece.onWheel`; after the wire it keeps the release angle and stays on the bat.
 
 ## Mobile
 
