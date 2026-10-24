@@ -170,7 +170,7 @@ export class Onboarding {
       this.options.tipSlot.hidden = true;
       return;
     }
-    const tip = coachTip(piece);
+    const tip = coachTip(piece, this.options.tools);
     const signature = tip ? `${tip.id}:${tip.tone}:${tip.text}` : '';
     if (signature === this.tipSig) return;
     this.tipSig = signature;

@@ -1,5 +1,6 @@
 import { canAttachHandle, canThrow, canTransition, canTrim, nextStage } from '../../core/stateMachine';
 import type { PieceState, Stage, StageId } from '../../core/types';
+import { readJoin } from '../../handbuild/join';
 
 export const JOURNEY_LABELS = ['Throw', 'Trim', 'Handle', 'Wax & glaze', 'Fire', 'Gallery'] as const;
 
@@ -138,8 +139,8 @@ function reasonFor(id: JourneyId, piece: PieceState | null): string {
       if (piece && laterThan(piece.stage, 'leather-hard')) return 'Only happens at leather-hard.';
       return 'Starts once the clay is leather-hard, on the wheel.';
     case 'handle':
-      if (piece && canAttachHandle(piece)) return 'Off the wheel. Score, then attach.';
-      if (piece && canTrim(piece)) return 'Take it off the wheel to attach a handle.';
+      if (piece && canAttachHandle(piece)) return handleReason(piece);
+      if (piece && canTrim(piece)) return 'Take it off the wheel to draw a handle.';
       if (piece && laterThan(piece.stage, 'leather-hard')) return 'That step is past.';
       return 'Joins leather-hard clay, off the wheel.';
     case 'wax':
@@ -160,6 +161,18 @@ function reasonFor(id: JourneyId, piece: PieceState | null): string {
       return unreachable;
     }
   }
+}
+
+function handleReason(piece: PieceState): string {
+  const joins = piece.attachments;
+  if (joins.length === 0) return 'Off the wheel. Draw a handle, then score and slip the join.';
+  if (joins.some((attachment) => !readJoin(attachment).scored)) {
+    return 'Off the wheel. Score the join, or it cracks off in the kiln.';
+  }
+  if (joins.some((attachment) => !readJoin(attachment).slipped)) {
+    return 'Off the wheel. Slip the scored join.';
+  }
+  return 'Off the wheel. The join is scored and slipped.';
 }
 
 function labelFor(piece: PieceState | null, stages: readonly Stage[]): string | null {

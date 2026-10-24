@@ -1,6 +1,7 @@
 import { centeredness, meanChannel, pieceHeight } from '../../clay/grid';
 import { canAttachHandle, canTrim, nextStage, pieceMoisture } from '../../core/stateMachine';
-import type { ClayGrid, PieceState } from '../../core/types';
+import type { Attachment, AttachmentKind, ClayGrid, PieceState } from '../../core/types';
+import { readJoin } from '../../handbuild/join';
 
 export interface CoachTip {
   id: string;
@@ -17,11 +18,26 @@ const WET_STRESS_S = 0.75;
 /** Leather-hard work wants moisture under this. Fresh wet clay is 1. */
 const LEATHER_MOISTURE = 0.7;
 
+/** A registry tool the coaching line can name. Instruction is unused here. */
+export interface CoachTool {
+  id: string;
+  label: string;
+}
+
+const TOOL_LABELS: Record<string, string> = {
+  handle: 'Handle',
+  coil: 'Coil',
+  sprig: 'Sprig',
+  score: 'Score',
+  slip: 'Slip',
+};
+
 /**
  * One coaching line from the piece itself: moisture, stress, failure,
  * the well, the wall, attachments, and whatever is already on the surface map.
+ * Handle, score, and slip names come from the tool registry when it is passed.
  */
-export function coachTip(piece: PieceState | null): CoachTip | null {
+export function coachTip(piece: PieceState | null, tools?: readonly CoachTool[]): CoachTip | null {
   if (!piece) {
     return {
       id: 'setup',
@@ -53,16 +69,7 @@ export function coachTip(piece: PieceState | null): CoachTip | null {
       text: 'Too wet, let it dry. Trimming and handles want leather-hard clay.',
     };
   }
-  if (canAttachHandle(piece) && !hasHandle(piece)) {
-    return {
-      id: 'score',
-      tone: 'info',
-      text: 'Score both faces and slip them before attaching the handle.',
-    };
-  }
-  if (canAttachHandle(piece)) {
-    return { id: 'handle-on', tone: 'info', text: 'Handle is on. Dry to bone-dry when the join looks sound.' };
-  }
+  if (canAttachHandle(piece)) return handleTip(piece, tools);
   if (canTrim(piece)) {
     return { id: 'trim', tone: 'info', text: 'Trim the foot while it is on the wheel. Take it off to add a handle.' };
   }
@@ -108,8 +115,53 @@ function throwingTip(grid: ClayGrid): CoachTip {
   return { id: 'wire', tone: 'info', text: 'The wall is up. Take it off the wheel when the mug feels right.' };
 }
 
-function hasHandle(piece: PieceState): boolean {
-  return piece.attachments.some((attachment) => attachment.kind === 'handle');
+function handleTip(piece: PieceState, tools: readonly CoachTool[] | undefined): CoachTip {
+  const score = toolLabel(tools, 'score');
+  const slip = toolLabel(tools, 'slip');
+  const handle = toolLabel(tools, 'handle');
+  const drawn = piece.attachments;
+  if (drawn.length === 0) {
+    return {
+      id: 'draw-handle',
+      tone: 'info',
+      text: `Draw a ${handle}, then ${score} and ${slip} the join.`,
+    };
+  }
+  const unscored = drawn.find((attachment) => !readJoin(attachment).scored);
+  if (unscored) {
+    return {
+      id: 'score-join',
+      tone: 'caution',
+      text: `Scratch the join with ${score}. A ${kindLabel(unscored, tools)} that was never scored cracks off in the kiln.`,
+    };
+  }
+  const unslipped = drawn.find((attachment) => !readJoin(attachment).slipped);
+  if (unslipped) {
+    return {
+      id: 'slip-join',
+      tone: 'caution',
+      text: `Brush ${slip} on the score. Without slip the ${kindLabel(unslipped, tools)} lets go in the fire.`,
+    };
+  }
+  return {
+    id: 'handle-on',
+    tone: 'info',
+    text: 'The join is scored and slipped. Dry to bone-dry when it looks sound.',
+  };
+}
+
+function kindLabel(attachment: Attachment, tools: readonly CoachTool[] | undefined): string {
+  return toolLabel(tools, toolIdForKind(attachment.kind));
+}
+
+function toolIdForKind(kind: AttachmentKind): string {
+  return kind === 'sculpt' ? 'sprig' : kind;
+}
+
+function toolLabel(tools: readonly CoachTool[] | undefined, id: string): string {
+  const label = tools?.find((tool) => tool.id === id)?.label;
+  if (label) return label;
+  return TOOL_LABELS[id] ?? id;
 }
 
 function surfaceCoat(piece: PieceState): { wax: boolean; glaze: boolean } {

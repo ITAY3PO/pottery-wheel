@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createPiece } from '../src/core/piece';
-import { loadStages, loadTools } from '../src/core/registry';
+import { loadStages, loadTools, toolsFor } from '../src/core/registry';
 import {
   canAttachHandle,
   canThrow,
@@ -12,7 +12,8 @@ import {
   skipDrying,
   transition,
 } from '../src/core/stateMachine';
-import type { PieceState } from '../src/core/types';
+import type { Attachment, AttachmentKind, PieceState } from '../src/core/types';
+import { writeJoin } from '../src/handbuild/join';
 import { buildJourney, journeyReason, journeyStatus } from '../src/ui/onboarding/journey';
 import { isTutorialDone, markTutorialDone, ONBOARDING_STORAGE_KEY } from '../src/ui/onboarding/storage';
 import { coachTip } from '../src/ui/onboarding/tips';
@@ -46,6 +47,20 @@ function evenOut(piece: PieceState): void {
     const mean = sum / grid.segments;
     for (let segment = 0; segment < grid.segments; segment++) grid.outer[ring * grid.segments + segment] = mean;
   }
+}
+
+function drawn(kind: AttachmentKind, id: string): Attachment {
+  return {
+    id,
+    kind,
+    joinBlend: 0.14,
+    tubularSegments: 8,
+    radialSegments: 6,
+    points: [
+      { x: 0.04, y: 0.03, z: 0, radius: 0.005 },
+      { x: 0.06, y: 0.06, z: 0, radius: 0.005 },
+    ],
+  };
 }
 
 function openWell(piece: PieceState): void {
@@ -97,7 +112,26 @@ describe('journey stepper', () => {
     expect(remountOnWheel(wet)).toBe(true);
     expect(step(wet, 'trim')).toMatchObject({ place: 'current', allowed: canTrim(wet) });
     expect(step(wet, 'handle')).toMatchObject({ place: 'pending', allowed: canAttachHandle(wet) });
+    expect(step(wet, 'handle').reason).toMatch(/Take it off the wheel to draw a handle/);
     expect(journeyStatus(step(wet, 'trim'))).toBe('now, ready');
+  });
+
+  it('follows score and slip on the Handle step once the piece is off the wheel', () => {
+    const piece = createPiece('stoneware', 1);
+    skipDrying(piece);
+    const shown = toolsFor(piece.stage, piece.onWheel, loadTools()).map((tool) => tool.id);
+    expect(shown).toEqual(expect.arrayContaining(['handle', 'score', 'slip']));
+    expect(toolsFor(piece.stage, true, loadTools()).some((tool) => tool.id === 'handle')).toBe(false);
+    expect(step(piece, 'handle')).toMatchObject({ place: 'current', allowed: true });
+    expect(step(piece, 'handle').reason).toMatch(/Draw a handle, then score and slip/);
+
+    const handle = drawn('handle', 'handle-1');
+    piece.attachments.push(handle);
+    expect(step(piece, 'handle').reason).toMatch(/Score the join/);
+    writeJoin(handle, true, false);
+    expect(step(piece, 'handle').reason).toMatch(/Slip the scored join/);
+    writeJoin(handle, true, true);
+    expect(step(piece, 'handle').reason).toMatch(/scored and slipped/);
   });
 
   it('marks the bisque fire ready before wax, then the glaze fire, then the gallery', () => {
@@ -173,29 +207,48 @@ describe('coach tips', () => {
     expect(coachTip(stressed)?.text).toMatch(/Too wet, let it dry/);
   });
 
-  it('asks for scoring before a handle, and stops once a handle is on', () => {
+  it('names the real handle, score, and slip tools, then the join flags', () => {
     const piece = createPiece('stoneware', 1);
     skipDrying(piece);
     expect(canAttachHandle(piece)).toBe(true);
-    expect(coachTip(piece)?.text).toMatch(/Score both faces and slip them before attaching/);
+    const tools = loadTools();
+    const tip = coachTip(piece, tools);
+    expect(tip?.id).toBe('draw-handle');
+    expect(tip?.text).toContain(tools.find((tool) => tool.id === 'handle')?.label);
+    expect(tip?.text).toContain(tools.find((tool) => tool.id === 'score')?.label);
+    expect(tip?.text).toContain(tools.find((tool) => tool.id === 'slip')?.label);
+
+    const renamed = [
+      { id: 'handle', label: 'Lug' },
+      { id: 'score', label: 'Hatch' },
+      { id: 'slip', label: 'Slurry' },
+      { id: 'sprig', label: 'Knob' },
+    ];
+    expect(coachTip(piece, renamed)?.text).toBe('Draw a Lug, then Hatch and Slurry the join.');
 
     piece.grid.moisture.fill(0.95);
     expect(coachTip(piece)?.text).toMatch(/Too wet, let it dry/);
     piece.grid.moisture.fill(0.42);
 
-    piece.attachments.push({
-      id: 'handle-1',
-      kind: 'handle',
-      joinBlend: 0.14,
-      tubularSegments: 8,
-      radialSegments: 6,
-      points: [
-        { x: 0.04, y: 0.03, z: 0, radius: 0.005 },
-        { x: 0.06, y: 0.06, z: 0, radius: 0.005 },
-      ],
-    });
+    const handle = drawn('handle', 'handle-1');
+    piece.attachments.push(handle);
+    expect(coachTip(piece)?.id).toBe('score-join');
+    expect(coachTip(piece)?.tone).toBe('caution');
+    expect(coachTip(piece, renamed)?.text).toMatch(/Hatch/);
+    expect(coachTip(piece, renamed)?.text).toMatch(/Lug/);
+
+    writeJoin(handle, true, false);
+    expect(coachTip(piece, renamed)?.id).toBe('slip-join');
+    expect(coachTip(piece, renamed)?.text).toMatch(/Slurry/);
+
+    const sprig = drawn('sculpt', 'sprig-1');
+    piece.attachments.push(sprig);
+    expect(coachTip(piece, renamed)?.text).toMatch(/Knob/);
+
+    writeJoin(handle, true, true);
+    writeJoin(sprig, true, true);
     expect(coachTip(piece)?.id).toBe('handle-on');
-    expect(coachTip(piece)?.text).not.toMatch(/Score/);
+    expect(coachTip(piece)?.text).toMatch(/scored and slipped/);
   });
 
   it('walks wax, glaze, and the finished pot from the surface map and the stage', () => {
