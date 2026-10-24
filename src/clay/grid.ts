@@ -109,8 +109,17 @@ export function maxOuterAtRing(grid: ClayGrid, ring: number): number {
   return max;
 }
 
-/** Right-hand silhouette (max world +X) at a height, given the piece rotation. */
-export function silhouette(grid: ClayGrid, height: number, angle: number, side: 1 | -1): number {
+/**
+ * Outermost clay along the camera's screen-right axis.
+ * `azimuth` 0 is the side camera on +Z, where screen-right is world +X.
+ */
+export function profileExtent(
+  grid: ClayGrid,
+  height: number,
+  rotation: number,
+  azimuth: number,
+  side: 1 | -1,
+): number {
   const ring = ringAtHeight(grid, height);
   const ring2 = clamp(ring + (grid.y[ring] < height ? 1 : -1), 0, grid.rings - 1);
   const y0 = grid.y[ring];
@@ -118,15 +127,19 @@ export function silhouette(grid: ClayGrid, height: number, angle: number, side: 
   const span = Math.abs(y1 - y0) < 1e-6 ? 0 : clamp((height - y0) / (y1 - y0), 0, 1);
   let best = 0;
   for (let s = 0; s < grid.segments; s++) {
-    const theta = (s / grid.segments) * Math.PI * 2 + angle;
+    const theta = (s / grid.segments) * Math.PI * 2 + rotation;
     const r0 = grid.outer[clayIndex(ring, s, grid.segments)];
     const r1 = grid.outer[clayIndex(ring2, s, grid.segments)];
     const radius = r0 + (r1 - r0) * span;
-    const x = radius * Math.sin(theta);
-    const signed = side * x;
+    const signed = side * radius * Math.sin(theta - azimuth);
     if (signed > best) best = signed;
   }
   return best;
+}
+
+/** Right-hand silhouette (max world +X) at a height, given the piece rotation. */
+export function silhouette(grid: ClayGrid, height: number, angle: number, side: 1 | -1): number {
+  return profileExtent(grid, height, angle, 0, side);
 }
 
 export function segmentAtWorldAngle(rotation: number, worldAngle: number, segments: number): number {

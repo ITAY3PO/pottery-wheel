@@ -13,7 +13,7 @@ export const stage: Stage = {
     if (!ctx.piece.onWheel) return 'It’s off the bat. Dry it to leather-hard when you like the shape.';
     if (!ctx.wheel.running && ctx.wheel.rpm < 8) return 'Start the wheel. The lump is still off-center.';
     if (centeredness(ctx.piece.grid) < 0.72) return 'Press Center into the side until the wobble runs true.';
-    return 'Open the middle, pull a wall, collar with Press, or compress the rim.';
+    return 'Press opens a well from the top and collars the wall from the side. Pull a wall, or compress the rim.';
   },
   actions: [
     {
