@@ -7,8 +7,10 @@ import {
   DirectionalLight,
   DoubleSide,
   Group,
+  InstancedMesh,
   LatheGeometry,
   Mesh,
+  Object3D,
   MeshBasicMaterial,
   MeshPhysicalMaterial,
   MeshStandardMaterial,
@@ -48,6 +50,8 @@ export class Studio {
   private readonly contact: Mesh;
   private readonly toolContacts = new Map<string, Mesh>();
   private readonly wire: Mesh;
+  private chipMesh: InstancedMesh | null = null;
+  private readonly chipDummy = new Object3D();
 
   constructor(canvas: HTMLCanvasElement) {
     const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
@@ -196,6 +200,37 @@ export class Studio {
     if (!visible) return;
     this.wire.position.set(0, Math.max(0.002, y), 0.012);
     this.wire.scale.set(1, Math.max(0.06, width), 1);
+  }
+
+  /** Leather-hard trimmings. Positions are world meters; `size` is the chip radius. */
+  showTrimChips(chips: readonly { x: number; y: number; z: number; size: number }[]): void {
+    if (chips.length === 0) {
+      if (this.chipMesh) {
+        this.chipMesh.visible = false;
+        this.chipMesh.count = 0;
+      }
+      return;
+    }
+    if (!this.chipMesh) {
+      this.chipMesh = new InstancedMesh(
+        new SphereGeometry(1, 6, 5),
+        new MeshStandardMaterial({ color: 0xa78468, roughness: 0.74, metalness: 0 }),
+        48,
+      );
+      this.chipMesh.frustumCulled = false;
+      this.scene.add(this.chipMesh);
+    }
+    const count = Math.min(chips.length, 48);
+    this.chipMesh.count = count;
+    this.chipMesh.visible = true;
+    for (let i = 0; i < count; i++) {
+      const chip = chips[i];
+      this.chipDummy.position.set(chip.x, chip.y, chip.z);
+      this.chipDummy.scale.setScalar(Math.max(0.0008, chip.size));
+      this.chipDummy.updateMatrix();
+      this.chipMesh.setMatrixAt(i, this.chipDummy.matrix);
+    }
+    this.chipMesh.instanceMatrix.needsUpdate = true;
   }
 
   bodyObjects(): Mesh[] {
