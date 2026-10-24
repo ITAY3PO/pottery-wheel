@@ -31,5 +31,11 @@ export function stageById(id: string, stages: readonly Stage[] = loadStages()): 
 }
 
 export function toolsFor(stageId: StageId, onWheel: boolean, tools: readonly Tool[] = loadTools()): Tool[] {
-  return tools.filter((tool) => tool.allowedStages.includes(stageId) && (!tool.requiresWheel || onWheel));
+  return tools.filter((tool) => {
+    if (!tool.allowedStages.includes(stageId)) return false;
+    if (tool.requiresWheel && !onWheel) return false;
+    // Hand-building sets this so its chips stay off the wheel, where trimming lives.
+    if (onWheel && (tool as Tool & { offWheel?: boolean }).offWheel) return false;
+    return true;
+  });
 }
