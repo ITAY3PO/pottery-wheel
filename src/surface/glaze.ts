@@ -1,14 +1,11 @@
+import type { SurfaceMap } from '../core/types';
+import { applyGlazeBrush } from './paint';
+
 /**
- * STUB — surface agent owns this folder.
- *
- * Paint from a tool. `ctx.surfaceHit` is the UV on the body or an attachment
- * (`meshId`, `u`, `v`, piece-local `point` and `normal`), or null on a miss.
- * Body UVs: u = angle, v = arc length, frozen once `grid.uvFrozen` is set.
- * Write `MeshSurface.map`, then `ctx.markSurfaceDirty(meshId)`.
- * Sample `uSurfaceGlaze`, `uSurfaceThickness`, `uSurfaceWax`, and
- * `uSurfaceUnderglaze` in a clay shader hook — core binds them per mesh.
- * Thickness is nearest-filtered. `transition(piece, 'glazed')` when the coat is done.
+ * Brush one dab of glaze onto a surface map.
+ * Waxed texels stay bare. Thickness stacks and caps at 2.55 mm.
+ * From a tool, prefer `ctx.surfaceHit` and `ctx.markSurfaceDirty`.
  */
-export function applyGlaze(): void {
-  throw new Error('surface/glaze.ts is a stub — paint MeshSurface maps, then transition to glazed');
+export function applyGlaze(map: SurfaceMap, u: number, v: number, radius: number, glazeId = 3): void {
+  applyGlazeBrush(map, glazeId, u, v, radius);
 }

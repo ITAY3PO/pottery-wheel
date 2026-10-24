@@ -1,6 +1,7 @@
 import { centeredness, meanChannel, pieceHeight } from '../../clay/grid';
 import { canAttachHandle, canTrim, nextStage, pieceMoisture } from '../../core/stateMachine';
 import type { Attachment, AttachmentKind, ClayGrid, PieceState } from '../../core/types';
+import { lastFiringNote } from '../../firing/outcome';
 import { readJoin } from '../../handbuild/join';
 
 export interface CoachTip {
@@ -46,6 +47,9 @@ export function coachTip(piece: PieceState | null, tools?: readonly CoachTool[])
     };
   }
 
+  if (lastFiringNote) {
+    return { id: 'kiln-note', tone: 'caution', text: lastFiringNote };
+  }
   if (piece.grid.failure === 'slumped') {
     return { id: 'slumped', tone: 'caution', text: 'Too wet, let it dry. The wall slumped.' };
   }
