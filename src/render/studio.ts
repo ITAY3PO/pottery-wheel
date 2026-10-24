@@ -5,11 +5,9 @@ import {
   Color,
   CylinderGeometry,
   DirectionalLight,
-  DoubleSide,
   Group,
   OrthographicCamera,
   InstancedMesh,
-  LatheGeometry,
   Mesh,
   Object3D,
   MeshBasicMaterial,
@@ -21,7 +19,6 @@ import {
   SphereGeometry,
   SRGBColorSpace,
   TorusGeometry,
-  Vector2,
   WebGLRenderer,
 } from 'three';
 import { getClay } from '../clay/clays';
@@ -66,7 +63,6 @@ export class Studio {
   private finishStage = '';
   private finishClay = '';
   private releaseAngle = 0;
-  private lift = 0;
   private readonly contact: Mesh;
   private readonly toolContacts = new Map<string, Mesh>();
   private readonly wire: Mesh;
@@ -144,7 +140,6 @@ export class Studio {
     this.table = buildTable();
     this.table.receiveShadow = profile.shadows;
     this.scene.add(this.table);
-    this.scene.add(buildPan());
     this.scene.add(this.wheelPivot);
     buildWheelHead(this.wheelPivot, profile.shadows);
     this.clayPivot.add(this.attachmentRoot);
@@ -259,17 +254,35 @@ export class Studio {
     this.rig.framePiece(height, radius);
   }
 
-  spin(angle: number, onWheel: boolean, dt: number): void {
+  spin(angle: number, onWheel: boolean, _dt: number): void {
     this.wheelPivot.rotation.y = angle;
     if (onWheel) {
       this.clayPivot.rotation.y = angle;
       this.releaseAngle = angle;
-      this.lift = 0;
     } else {
       this.clayPivot.rotation.y = this.releaseAngle;
-      this.lift += (0.014 - this.lift) * Math.min(1, dt * 6);
     }
-    this.clayPivot.position.y = this.lift;
+    // The piece stays on the bat. A 14mm rise used to clear the splash pan.
+    this.clayPivot.position.y = 0;
+  }
+
+  /** World height of the bat's top face. */
+  batTopY(): number {
+    const bat = this.wheelPivot.getObjectByName('bat');
+    if (!bat) return Number.NaN;
+    bat.updateWorldMatrix(true, false);
+    const geometry = (bat as Mesh).geometry;
+    if (!geometry.boundingBox) geometry.computeBoundingBox();
+    const localTop = geometry.boundingBox?.max.y ?? 0;
+    const e = bat.matrixWorld.elements;
+    return e[13] + e[5] * localTop;
+  }
+
+  /** World height of ring 0, the bottom of the clay. */
+  pieceBottomY(gridBottom: number): number {
+    this.clayPivot.updateWorldMatrix(true, false);
+    const e = this.clayPivot.matrixWorld.elements;
+    return e[13] + e[5] * gridBottom;
   }
 
   /** Keep the empty wheel turning gently on the setup screen. */
@@ -701,36 +714,11 @@ function buildTable(): Mesh {
   return mesh;
 }
 
-function buildPan(): Mesh {
-  const points = [
-    new Vector2(0.03, -0.055),
-    new Vector2(0.15, -0.058),
-    new Vector2(0.188, -0.03),
-    new Vector2(0.206, 0.008),
-    new Vector2(0.218, 0.03),
-    new Vector2(0.206, 0.044),
-    new Vector2(0.192, 0.02),
-    new Vector2(0.178, -0.02),
-    new Vector2(0.16, -0.046),
-    new Vector2(0.04, -0.048),
-  ];
-  return new Mesh(
-    new LatheGeometry(points, 64),
-    new MeshPhysicalMaterial({
-      color: 0xead7c4,
-      roughness: 0.38,
-      metalness: 0.02,
-      clearcoat: 0.45,
-      clearcoatRoughness: 0.28,
-      side: DoubleSide,
-    }),
-  );
-}
-
 function buildWheelHead(pivot: Group, shadows: boolean): void {
   const head = new Mesh(
     new CylinderGeometry(0.146, 0.146, 0.02, 64),
-    new MeshStandardMaterial({ color: 0x8d939a, metalness: 0.92, roughness: 0.34 }),
+    // The room map arrives at bisque. A near-mirror head is black until then.
+    new MeshStandardMaterial({ color: 0x8d939a, metalness: 0.6, roughness: 0.46 }),
   );
   head.position.y = -0.02;
   head.receiveShadow = shadows;
@@ -745,6 +733,7 @@ function buildWheelHead(pivot: Group, shadows: boolean): void {
       metalness: 0,
     }),
   );
+  bat.name = 'bat';
   bat.position.y = -0.0045;
   bat.receiveShadow = shadows;
   pivot.add(bat);

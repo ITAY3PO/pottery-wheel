@@ -68,7 +68,19 @@ function pottery(page: Page) {
         return app.environment();
       });
     },
+    async seatGap(): Promise<number> {
+      return page.evaluate(() => {
+        const app = (window as unknown as { __pottery: { seatGap: () => number } }).__pottery;
+        return app.seatGap();
+      });
+    },
   };
+}
+
+/** The old off-wheel rise eased toward 14mm. Wait until that ease would have cleared 1mm. */
+async function expectOnBat(page: Page, wheel: ReturnType<typeof pottery>): Promise<void> {
+  await page.waitForTimeout(400);
+  expect(await wheel.seatGap()).toBeLessThan(0.001);
 }
 
 async function drag(page: Page, from: Point, to: Point, steps = 10): Promise<void> {
@@ -206,6 +218,7 @@ test('throws, trims, handles, fires, and opens a share link', async ({ page }) =
   await page.locator('[data-stop]').click();
   await clickAction(page, 'wire-off');
   await expect.poll(() => wheel.stage()).toBe('wet');
+  await expectOnBat(page, wheel);
   await clickAction(page, 'dry-leather');
   await expect.poll(() => wheel.stage()).toBe('leather-hard');
 
@@ -217,6 +230,7 @@ test('throws, trims, handles, fires, and opens a share link', async ({ page }) =
   await drag(page, trimIn, trimOut, 8);
 
   await clickAction(page, 'unmount');
+  await expectOnBat(page, wheel);
   await clickTool(page, 'handle');
   const handleStart = await wheel.project(0.045, 0.03);
   const handleEnd = await wheel.project(0.05, 0.12);
@@ -319,19 +333,26 @@ test('resuming a glaze-fired piece keeps the glaze and the room', async ({ page 
   }
 
   await clickAction(page, 'wire-off');
+  await expect.poll(() => wheel.stage()).toBe('wet');
+  await expectOnBat(page, wheel);
   await clickAction(page, 'dry-leather');
   await expect.poll(() => wheel.stage()).toBe('leather-hard');
+  await expectOnBat(page, wheel);
   await clickAction(page, 'dry-bone');
   await expect.poll(() => wheel.stage()).toBe('bone-dry');
+  await expectOnBat(page, wheel);
   await clickAction(page, 'fire-bisque');
   await openKilnDoor(page);
   await expect.poll(() => wheel.stage()).toBe('bisque');
+  await expectOnBat(page, wheel);
   await clickAction(page, 'dip');
   await clickAction(page, 'finish-glaze');
   await expect.poll(() => wheel.stage()).toBe('glazed');
+  await expectOnBat(page, wheel);
   await clickAction(page, 'fire-glaze');
   await openKilnDoor(page);
   await expect.poll(() => wheel.stage()).toBe('glaze-fired');
+  await expectOnBat(page, wheel);
 
   await page.reload();
   await wheel.ready();
@@ -340,4 +361,5 @@ test('resuming a glaze-fired piece keeps the glaze and the room', async ({ page 
   await expect.poll(() => wheel.stage()).toBe('glaze-fired');
   await expect.poll(() => wheel.glazeBound(), { timeout: 20_000 }).toBe(true);
   await expect.poll(() => wheel.environment(), { timeout: 20_000 }).toBe(true);
+  await expectOnBat(page, wheel);
 });
