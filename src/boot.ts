@@ -9,19 +9,17 @@ import { clampWeight, createPiece } from './core/piece';
 import { loadStages, loadTools, stageById, toolsFor } from './core/registry';
 import { clearPiece, hasSavedPiece, loadPiece, savePiece } from './core/storage';
 import type { ClayTypeId, PieceState, Stage, SurfaceHit, Tool, ToolContext, ToolPointer } from './core/types';
-import { Vector3 } from 'three';
+import { yieldToMain } from './core/yield';
 import { currentProfile, noteFrame, setQualityMode } from './render/quality';
-import { Studio } from './render/studio';
+import type { Studio } from './render/studio';
 import { stepTrimChips } from './tools/trim-chips';
 import { Onboarding } from './ui/onboarding/onboarding';
 import { Shell, type ShellModel } from './ui/shell/shell';
 import { ViewBar } from './ui/views';
 import { Wheel } from './core/wheel';
-import { installAudio } from './audio';
 import { readJoin } from './handbuild/join';
 import { openUpdatePrompt } from './pwa/update';
 import { bindFiringApp } from './firing/kiln';
-import { bindGlazeFrame } from './firing/look';
 import { bindSurfaceDirty } from './surface/dirty';
 import { bindPainter } from './surface/session';
 
@@ -36,7 +34,9 @@ canvas.setAttribute(
 );
 app.append(canvas);
 
-const studio = new Studio(canvas);
+let studio!: Studio;
+let graphicsReady = false;
+let glazeBound = false;
 const wheel = new Wheel();
 const tools = loadTools();
 const stages = loadStages();
@@ -92,10 +92,12 @@ const shell = new Shell(app, {
   onWeight: (kg) => {
     weightKg = clampWeight(kg);
   },
-  onBegin: () => begin(createPiece(clayId, weightKg)),
+  onBegin: () => {
+    void mountGraphics().then(() => begin(createPiece(clayId, weightKg)));
+  },
   onResume: () => {
     const saved = loadPiece();
-    if (saved) begin(saved);
+    if (saved) void mountGraphics().then(() => begin(saved));
   },
   onStart: () => {
     wheel.running = true;
@@ -134,17 +136,20 @@ const shell = new Shell(app, {
     wheel.running = false;
     wheel.omega = 0;
     activeToolId = 'center';
-    studio.syncPiece(null);
+    if (graphicsReady) {
+      studio.syncPiece(null);
+      studio.rig.setPreset('side');
+    }
     publish();
     events.emit('piece-change', { piece: null });
-    studio.rig.setPreset('side');
     views.setActive('side');
   },
   onHelp: () => onboarding.replay(),
   onQuality: (mode) => {
     const profile = setQualityMode(mode);
-    studio.applyQuality(profile);
     shell.setQuality(profile);
+    if (!studio) return;
+    studio.applyQuality(profile);
     // setSize clears the drawing buffer. Idle has no loop, so ask for a frame.
     wake(200);
   },
@@ -174,6 +179,7 @@ let aliveUntil = 0;
 
 /** Draw again soon. A settled scene does not keep the main thread busy. */
 function scheduleFrame(): void {
+  if (!graphicsReady || !studio) return;
   if (scheduled) return;
   if (!looping) {
     // The clock stopped with the last frame. Stamp it so a quick tap is not a hold.
@@ -195,11 +201,12 @@ function wake(ms: number): void {
 }
 
 const views = new ViewBar(app, (preset) => {
+  if (!studio) return;
   studio.rig.setPreset(preset);
   views.setActive(preset);
   wake(1400);
 });
-views.setActive(studio.rig.preset);
+views.setActive('side');
 
 window.addEventListener('resize', () => {
   resize();
@@ -210,18 +217,8 @@ new ResizeObserver(() => {
   scheduleFrame();
 }).observe(app);
 resize();
-studio.applyQuality(currentProfile());
 shell.setQuality(currentProfile());
 publish();
-installAudio({
-  wheel,
-  getPiece: () => piece,
-  getPointer: () => (toolDown && previous ? previous : null),
-  getTool: () => activeToolId,
-});
-const mute = document.getElementById('pw-mute');
-if (mute) shell.topbar.append(mute);
-bindSurfaceDirty((meshId) => studio.markSurfaceDirty(meshId));
 bindPainter({
   piece: () => piece,
   publish: () => afterChange(),
@@ -232,9 +229,6 @@ bindFiringApp({
     afterChange();
   },
 });
-bindGlazeFrame();
-studio.whenEnvironmentReady(() => scheduleFrame());
-scheduleFrame();
 
 canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 canvas.addEventListener('pointerdown', onPointerDown);
@@ -258,6 +252,11 @@ function begin(next: PieceState): void {
 }
 
 function frame(now: number): void {
+  if (!studio) {
+    looping = false;
+    return;
+  }
+  const gfx = studio;
   // A slow frame still advances the wheel. Pressure tools scale with dt, so
   // they run on each fixed step; a pull's drag is the pointer delta and only
   // lands on the step where the finger actually moved. Quality sees the real
@@ -270,15 +269,15 @@ function frame(now: number): void {
   last = step.lastMs;
   if (step.sample != null && noteFrame(step.sample)) {
     const profile = currentProfile();
-    studio.applyQuality(profile);
+    gfx.applyQuality(profile);
     shell.setQuality(profile);
   }
   const chips = stepTrimChips(elapsed);
   if (!piece) {
     idleAngle += elapsed * 0.55;
-    studio.idleSpin(idleAngle);
-    studio.showTrimChips(chips);
-    studio.render(elapsed);
+    gfx.idleSpin(idleAngle);
+    gfx.showTrimChips(chips);
+    gfx.render(elapsed);
     events.emit('frame', { dt: elapsed, piece: null });
     continueFrame(chips.length > 0);
     return;
@@ -288,7 +287,7 @@ function frame(now: number): void {
   let steps = 0;
   const stroke = toolDown && latest ? measure(latest.x, latest.y) : null;
   const toolNow = currentTool();
-  const surfaceHit = stroke && wantsSurface(toolNow, piece.onWheel) ? studio.hitTest() : null;
+  const surfaceHit = stroke && wantsSurface(toolNow, piece.onWheel) ? gfx.hitTest() : null;
   while (remaining > 1e-5 && steps < 16) {
     const dt = Math.min(SIM_STEP, remaining);
     remaining -= dt;
@@ -303,12 +302,12 @@ function frame(now: number): void {
     if (integrity.tore) toast('The wall tore. Too thin for this clay.');
     if (integrity.slumped) toast('The clay slumped — too wet, and too tall.');
   }
-  studio.syncPiece(piece);
-  studio.spin(wheel.angle, piece.onWheel, elapsed);
+  gfx.syncPiece(piece);
+  gfx.spin(wheel.angle, piece.onWheel, elapsed);
   updateCursor();
-  studio.showTrimChips(chips);
+  gfx.showTrimChips(chips);
   events.emit('frame', { dt: elapsed, piece });
-  studio.render(elapsed);
+  gfx.render(elapsed);
 
   saveTimer += elapsed;
   if (saveTimer > 4) {
@@ -419,6 +418,7 @@ function canOrbit(): boolean {
 }
 
 function onPointerDown(event: PointerEvent): void {
+  if (!graphicsReady) return;
   if (event.button === 2) {
     if (canOrbit()) {
       rightOrbit = true;
@@ -448,6 +448,7 @@ function onPointerDown(event: PointerEvent): void {
 }
 
 function onPointerMove(event: PointerEvent): void {
+  if (!graphicsReady) return;
   const previousPoint = pointers.get(event.pointerId);
   if (!previousPoint && !rightOrbit) return;
   if (rightOrbit && canOrbit()) {
@@ -691,8 +692,14 @@ function afterChange(): void {
   const available = toolsFor(piece.stage, piece.onWheel, tools);
   if (!available.some((tool) => tool.id === activeToolId)) activeToolId = available[0]?.id ?? null;
   confirmDiscard = false;
-  studio.syncPiece(piece);
+  if (graphicsReady) studio.syncPiece(piece);
   savePiece(piece);
+  ensureGlaze();
+  // Env-map programs are too expensive for the opening paint. Bind them once
+  // the piece is fired, when the reflections actually show the glaze.
+  if (graphicsReady && piece.stage !== 'wet' && piece.stage !== 'leather-hard' && piece.stage !== 'bone-dry') {
+    void studio.prepareEnvironment().then(() => scheduleFrame());
+  }
   publish();
 }
 
@@ -710,6 +717,7 @@ function resize(): void {
   const rect = shell.chrome.getBoundingClientRect();
   // The update bar is on document.body, so the sheet height has to live on the root.
   document.documentElement.style.setProperty('--chrome-block', `${Math.round(rect.height)}px`);
+  if (!studio) return;
   // Portrait: the chrome covers the bottom, so the canvas is only the part
   // above it. A centered desktop chrome leaves the sides open and the camera
   // shifts the clay up. Phone landscape docks the chrome on the right; the
@@ -753,36 +761,85 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-const projected = new Vector3();
+function ensureGlaze(): void {
+  if (glazeBound || !piece) return;
+  if (piece.stage !== 'bisque' && piece.stage !== 'glazed' && piece.stage !== 'glaze-fired') return;
+  glazeBound = true;
+  void import('./firing/look').then(({ bindGlazeFrame }) => bindGlazeFrame());
+}
 
-Object.assign(window, {
-  __pottery: {
-    centeredness: () => (piece ? centeredness(piece.grid) : 0),
-    height: () => (piece ? pieceHeight(piece.grid) : 0),
-    innerAt: (t: number) => {
-      if (!piece) return 0;
-      const ring = Math.min(piece.grid.rings - 1, Math.max(0, Math.round(t * (piece.grid.rings - 1))));
-      let sum = 0;
-      for (let s = 0; s < piece.grid.segments; s++) sum += piece.grid.inner[ring * piece.grid.segments + s];
-      return sum / piece.grid.segments;
+/** Shell and onboarding are already on screen. Three.js starts on the next turns. */
+let mounting: Promise<void> | null = null;
+function mountGraphics(): Promise<void> {
+  mounting ??= startGraphics();
+  return mounting;
+}
+
+async function startGraphics(): Promise<void> {
+  await yieldToMain();
+  const pending = import('./render/studio');
+  await yieldToMain();
+  const { Studio } = await pending;
+  await yieldToMain();
+  studio = new Studio(canvas);
+  resize();
+  studio.applyQuality(currentProfile());
+  shell.setQuality(currentProfile());
+  // Warm while the canvas is out of the document. A yielded draw on an attached
+  // canvas becomes a compositor readback, and under software GL that readback
+  // is the long task. The shell does not move; the canvas is absolutely placed.
+  canvas.remove();
+  await yieldToMain();
+  await studio.warmShaders();
+  app?.prepend(canvas);
+  graphicsReady = true;
+  bindSurfaceDirty((meshId) => studio.markSurfaceDirty(meshId));
+  scheduleFrame();
+  const { Vector3 } = await import('three');
+  const projected = new Vector3();
+  Object.assign(window, {
+    __pottery: {
+      centeredness: () => (piece ? centeredness(piece.grid) : 0),
+      height: () => (piece ? pieceHeight(piece.grid) : 0),
+      innerAt: (t: number) => {
+        if (!piece) return 0;
+        const ring = Math.min(piece.grid.rings - 1, Math.max(0, Math.round(t * (piece.grid.rings - 1))));
+        let sum = 0;
+        for (let s = 0; s < piece.grid.segments; s++) sum += piece.grid.inner[ring * piece.grid.segments + s];
+        return sum / piece.grid.segments;
+      },
+      rpm: () => wheel.rpm,
+      stage: () => piece?.stage ?? 'setup',
+      onWheel: () => Boolean(piece?.onWheel),
+      attachmentCount: () => piece?.attachments.length ?? 0,
+      join: () => readJoin(piece?.attachments[piece.attachments.length - 1]),
+      quality: () => currentProfile(),
+      showUpdate: () => openUpdatePrompt(),
+      edge: (height: number, side: number) =>
+        piece ? silhouette(piece.grid, height, studio.clayPivot.rotation.y, side >= 0 ? 1 : -1) : 0,
+      project(x: number, y: number) {
+        projected.set(x, y, 0);
+        projected.project(studio.rig.camera);
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: (projected.x * 0.5 + 0.5) * rect.width + rect.left,
+          y: (-projected.y * 0.5 + 0.5) * rect.height + rect.top,
+        };
+      },
     },
-    rpm: () => wheel.rpm,
-    stage: () => piece?.stage ?? 'setup',
-    onWheel: () => Boolean(piece?.onWheel),
-    attachmentCount: () => piece?.attachments.length ?? 0,
-    join: () => readJoin(piece?.attachments[piece.attachments.length - 1]),
-    quality: () => currentProfile(),
-    showUpdate: () => openUpdatePrompt(),
-    edge: (height: number, side: number) =>
-      piece ? silhouette(piece.grid, height, studio.clayPivot.rotation.y, side >= 0 ? 1 : -1) : 0,
-    project(x: number, y: number) {
-      projected.set(x, y, 0);
-      projected.project(studio.rig.camera);
-      const rect = canvas.getBoundingClientRect();
-      return {
-        x: (projected.x * 0.5 + 0.5) * rect.width + rect.left,
-        y: (-projected.y * 0.5 + 0.5) * rect.height + rect.top,
-      };
-    },
-  },
-});
+  });
+  await yieldToMain();
+  const { installAudio } = await import('./audio');
+  installAudio({
+    wheel,
+    getPiece: () => piece,
+    getPointer: () => (toolDown && previous ? previous : null),
+    getTool: () => activeToolId,
+  });
+  const mute = document.getElementById('pw-mute');
+  if (mute) shell.topbar.append(mute);
+}
+
+// After `mounting` is initialized. A call above that `let` hits the temporal dead zone.
+void mountGraphics();
+

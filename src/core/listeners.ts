@@ -8,6 +8,6 @@ import { events } from './events';
 void events;
 
 export const listenerModules: Record<string, unknown> = import.meta.glob(
-  ['../audio/**/*.ts', '../gallery/**/*.ts', '../onboarding/**/*.ts'],
+  ['../gallery/**/*.ts', '!../gallery/view.ts', '../onboarding/**/*.ts'],
   { eager: true },
 );

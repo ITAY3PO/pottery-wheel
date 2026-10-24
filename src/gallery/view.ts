@@ -9,12 +9,11 @@ import {
   MeshPhysicalMaterial,
   MeshStandardMaterial,
   PerspectiveCamera,
-  PMREMGenerator,
   Scene,
   SRGBColorSpace,
   WebGLRenderer,
 } from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { installBakedRoom } from '../render/roomEnvironment';
 import { getClay } from '../clay/clays';
 import { pieceHeight } from '../clay/grid';
 import type { PieceState } from '../core/types';
@@ -61,6 +60,8 @@ export class Turntable {
   private heightM = 0.08;
   private radiusM = 0.05;
   private sheetHeight = () => 0;
+  private shadersReady = false;
+  private shaderWarm: Promise<void> | null = null;
   private readonly onDown: (event: PointerEvent) => void;
   private readonly onMove: (event: PointerEvent) => void;
   private readonly onUp: (event: PointerEvent) => void;
@@ -78,11 +79,9 @@ export class Turntable {
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.12;
     this.renderer.setClearColor(new Color('#3a2e28'), 1);
+    this.renderer.debug.checkShaderErrors = false;
     this.scene.background = new Color('#3a2e28');
-
-    const pmrem = new PMREMGenerator(this.renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    pmrem.dispose();
+    void installBakedRoom(this.renderer, this.scene);
 
     const hemi = new HemisphereLight(0xfff6ec, 0x3a2a22, 0.55);
     const key = new DirectionalLight(0xfff0dc, 3.3);
@@ -229,6 +228,13 @@ export class Turntable {
       this.last = now;
       if (!this.dragging && !this.auto && now >= this.resumeAt) this.auto = true;
       if (this.auto) this.pivot.rotation.y += dt * 0.55;
+      if (!this.shadersReady) {
+        this.shaderWarm ??= this.renderer.compileAsync(this.scene, this.camera).then(() => {
+          this.shadersReady = true;
+        });
+        this.frameId = requestAnimationFrame(tick);
+        return;
+      }
       this.renderer.render(this.scene, this.camera);
       this.frameId = requestAnimationFrame(tick);
     };

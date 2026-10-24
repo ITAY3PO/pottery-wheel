@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <body>
+    <canvas id="c"></canvas>
+    <script type="module">
+      import { PMREMGenerator, WebGLRenderer } from 'three';
+      import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+      const canvas = document.getElementById('c');
+      const renderer = new WebGLRenderer({ canvas, antialias: false, alpha: false });
+      renderer.debug.checkShaderErrors = false;
+      const pmrem = new PMREMGenerator(renderer);
+      const target = pmrem.fromScene(new RoomEnvironment(), 0.04, 0.1, 100, { size: 16 });
+      const { width, height } = target;
+      const pixels = new Uint16Array(width * height * 4);
+      renderer.readRenderTargetPixels(target, 0, 0, width, height, pixels);
+      const bytes = new Uint8Array(pixels.buffer);
+      let binary = '';
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+      }
+      window.__room = { width, height, b64: btoa(binary) };
+    </script>
+  </body>
+</html>

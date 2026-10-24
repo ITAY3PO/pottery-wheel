@@ -14,12 +14,35 @@ function preloadBoot(): Plugin {
           const link = `<link rel="modulepreload" crossorigin href="${base}src/boot.ts">`;
           return html.includes(link) ? html : html.replace('</head>', `${link}</head>`);
         }
-        const boot = Object.values(ctx.bundle ?? {}).find(
-          (item) => item.type === 'chunk' && item.facadeModuleId?.replaceAll('\\', '/').endsWith('/src/boot.ts'),
-        );
-        if (!boot || boot.type !== 'chunk') return html;
-        const link = `<link rel="modulepreload" crossorigin href="${base}${boot.fileName}">`;
-        return html.includes(link) ? html : html.replace('</head>', `${link}</head>`);
+        const bundle = ctx.bundle ?? {};
+        const chunks = Object.values(bundle).filter((item) => item.type === 'chunk');
+        // The boot chunk's facade is cleared when its CSS is split into a sibling asset.
+        const boot = chunks.find((item) => {
+          const facade = item.facadeModuleId?.replaceAll('\\', '/') ?? '';
+          return facade.endsWith('/src/boot.ts') || /\/boot-[^/]+\.js$/.test(item.fileName);
+        });
+        if (!boot) return html;
+        const seen = new Set<string>();
+        const links: string[] = [];
+        const walkStatic = (fileName: string) => {
+          if (seen.has(fileName)) return;
+          const item = bundle[fileName];
+          if (!item || item.type !== 'chunk') return;
+          seen.add(fileName);
+          links.push(`<link rel="modulepreload" crossorigin href="${base}${item.fileName}">`);
+          for (const child of item.imports) walkStatic(child);
+        };
+        walkStatic(boot.fileName);
+        // Studio and Three.js download with the page. Audio and glaze stay
+        // off this list so they do not compete with the shell on a slow phone.
+        for (const child of boot.dynamicImports) {
+          const item = bundle[child];
+          if (item?.type === 'chunk' && item.facadeModuleId?.replaceAll('\\', '/').endsWith('/src/render/studio.ts')) {
+            walkStatic(child);
+          }
+        }
+        const block = links.filter((link) => !html.includes(link)).join('');
+        return block ? html.replace('</head>', `${block}</head>`) : html;
       },
     },
   };
@@ -53,7 +76,7 @@ export default defineConfig({
         navigateFallback: 'index.html',
         // Icons and the manifest are added once by the plugin. A broad png/webmanifest
         // glob precaches them a second time. The share image is not a manifest icon.
-        globPatterns: ['**/*.{js,css,html,woff2}', 'og-preview.png'],
+        globPatterns: ['**/*.{js,css,html,woff2}', 'og-preview.png', 'room-pmrem.bin'],
         cleanupOutdatedCaches: true,
         skipWaiting: false,
         clientsClaim: false,

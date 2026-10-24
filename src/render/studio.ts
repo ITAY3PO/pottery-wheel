@@ -16,7 +16,6 @@ import {
   MeshPhysicalMaterial,
   MeshStandardMaterial,
   PCFShadowMap,
-  PMREMGenerator,
   RepeatWrapping,
   Scene,
   SphereGeometry,
@@ -25,7 +24,6 @@ import {
   Vector2,
   WebGLRenderer,
 } from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { getClay } from '../clay/clays';
 import { dressAttachmentMaterial } from '../firing/look';
 import { maxOuterAtRing, pieceHeight } from '../clay/grid';
@@ -35,6 +33,7 @@ import { currentProfile, type QualityProfile } from './quality';
 import { CameraRig } from './cameraRig';
 import { ClayMesh } from './clayMesh';
 import { raycastToUV } from './raycastUV';
+import { yieldToMain } from '../core/yield';
 import {
   applyClayFinish,
   bindSurfaceUniforms,
@@ -88,8 +87,21 @@ export class Studio {
     const profile = currentProfile();
     this.maxRings = profile.maxRings;
     this.maxSegments = profile.maxSegments;
+    // desynchronized keeps the compositor from waiting on a CPU readback of the
+    // drawing buffer, which is a multi-hundred-ms task under software GL.
+    const gl = canvas.getContext('webgl2', {
+      alpha: false,
+      antialias: profile.pixelRatio <= 1,
+      depth: true,
+      desynchronized: true,
+      failIfMajorPerformanceCaveat: false,
+      powerPreference: 'high-performance',
+      premultipliedAlpha: true,
+      stencil: false,
+    });
     this.renderer = new WebGLRenderer({
       canvas,
+      context: gl ?? undefined,
       // MSAA on top of a phone-sized buffer blows the fill rate. Quality
       // turns it on only for a sharp desktop pixel.
       antialias: profile.pixelRatio <= 1,
@@ -104,6 +116,9 @@ export class Studio {
     this.renderer.setPixelRatio(profile.pixelRatio);
     this.renderer.shadowMap.type = PCFShadowMap;
     this.renderer.shadowMap.enabled = profile.shadows;
+    // getProgramInfoLog waits out the compiler. Leave it off so compileAsync
+    // can poll KHR_parallel_shader_compile instead of stalling the first frame.
+    this.renderer.debug.checkShaderErrors = false;
 
     const key = new DirectionalLight(0xfff0dc, 3.4);
     key.position.set(-0.85, 1.25, 0.62);
@@ -130,8 +145,6 @@ export class Studio {
     this.scene.add(buildPan());
     this.scene.add(this.wheelPivot);
     buildWheelHead(this.wheelPivot, profile.shadows);
-    this.scheduleEnvironment();
-
     this.clayPivot.add(this.attachmentRoot);
     this.scene.add(this.clayPivot);
 
@@ -449,25 +462,90 @@ export class Studio {
     }
   }
 
-  /** PMREM is a long task. The first frames render with the key light alone. */
+  /**
+   * Compile one mesh at a time into a tiny target. The light stays on so the
+   * lit program is the one that gets cached. Nothing is presented, so the
+   * compositor does not read the canvas back on each turn.
+   */
+  async warmShaders(): Promise<void> {
+    const camera = this.rig.camera;
+    const children = [...this.scene.children];
+    const childWasVisible = children.map((child) => child.visible);
+    const meshes: Mesh[] = [];
+    this.scene.traverse((node) => {
+      if ((node as Mesh).isMesh) meshes.push(node as Mesh);
+    });
+    const meshWasVisible = meshes.map((mesh) => mesh.visible);
+    for (const mesh of meshes) mesh.visible = false;
+    for (const child of children) {
+      if ((child as { isLight?: boolean }).isLight) continue;
+      child.visible = false;
+    }
+    const compiled = new Set<string>();
+    for (const mesh of meshes) {
+      const material = mesh.material;
+      const key = Array.isArray(material) ? '' : material.uuid;
+      if (compiled.has(key)) continue;
+      compiled.add(key);
+      const opened: Object3D[] = [];
+      let parent: Object3D | null = mesh.parent;
+      while (parent && parent !== this.scene) {
+        if (!parent.visible) opened.push(parent);
+        parent.visible = true;
+        parent = parent.parent;
+      }
+      mesh.visible = true;
+      this.renderer.render(this.scene, camera);
+      // Finish this program before yielding so its compile does not pile into the present.
+      this.renderer.getContext().finish();
+      mesh.visible = false;
+      for (const ancestor of opened) ancestor.visible = false;
+      await yieldToMain();
+    }
+    meshes.forEach((mesh, index) => {
+      mesh.visible = meshWasVisible[index] ?? true;
+    });
+    children.forEach((child, index) => {
+      child.visible = childWasVisible[index] ?? true;
+    });
+  }
+
+  /** Upload the room map before the first draw so materials compile one variant. */
+  async prepareEnvironment(): Promise<void> {
+    if (this.environmentReady) return;
+    try {
+      const { installBakedRoom } = await import('./roomEnvironment');
+      await installBakedRoom(this.renderer, this.scene);
+    } catch {
+      // The key light still describes the room when the map cannot be fetched.
+    }
+    this.environmentReady = true;
+  }
+
   /** One shot after the deferred room map is uploaded, so the loop can stay stopped. */
   whenEnvironmentReady(listener: () => void): void {
     this.environmentListener = listener;
     if (this.environmentReady) listener();
   }
 
-  private scheduleEnvironment(): void {
-    const build = () => {
-      if (this.environmentReady) return;
-      this.environmentReady = true;
-      const pmrem = new PMREMGenerator(this.renderer);
-      this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-      pmrem.dispose();
-      this.environmentListener?.();
-    };
-    const idle = window.requestIdleCallback;
-    if (typeof idle === 'function') idle(() => build(), { timeout: 1200 });
-    else window.setTimeout(build, 400);
+  /**
+   * The room map is a prefiltered cube. Building it at runtime compiles more
+   * shaders and blurs on the CPU, so the startup path only uploads a baked map.
+   */
+  startEnvironment(): void {
+    if (this.environmentReady) return;
+    void this.loadBakedEnvironment();
+  }
+
+  private async loadBakedEnvironment(): Promise<void> {
+    await yieldToMain();
+    if (this.environmentReady) return;
+    const { installBakedRoom } = await import('./roomEnvironment');
+    await yieldToMain();
+    if (this.environmentReady) return;
+    this.environmentReady = true;
+    await installBakedRoom(this.renderer, this.scene);
+    this.environmentListener?.();
   }
 
   private releaseAttachment(mesh: Mesh): void {
