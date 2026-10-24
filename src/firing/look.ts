@@ -65,6 +65,8 @@ export function applyFiredLook(material: MeshPhysicalMaterial, piece: PieceState
   const fire = fireForStage(piece.stage);
   material.userData.pwFire = fire;
   material.userData.pwFiredMeshId = meshId;
+  material.metalness = 0;
+  if (meshId !== 'body') dressAttachmentMaterial(material);
   if (!hookedMaterials.has(material)) {
     hookedMaterials.add(material);
     addClayShaderHook(
@@ -109,7 +111,38 @@ function applyRawFinish(material: MeshPhysicalMaterial): void {
     mat.clearcoatRoughness = 0.8;
     mat.sheen = 0;
     mat.envMapIntensity = 0.25;
+    mat.metalness = 0;
   }
+}
+
+/**
+ * A handle is a thin tube. The body's clearcoat, sheen, and env map turn that
+ * tube into a chrome mirror, and vertex colors with no color attribute zero
+ * the albedo. Keep the clay dielectric and let the glaze shader supply the color.
+ */
+export function dressAttachmentMaterial(material: MeshPhysicalMaterial): void {
+  material.metalness = 0;
+  material.vertexColors = false;
+  material.sheen = 0;
+  material.envMapIntensity = Math.min(material.envMapIntensity, 0.4);
+  if (material.clearcoat > 0.4) {
+    material.clearcoat = 0.4;
+    material.clearcoatRoughness = Math.max(material.clearcoatRoughness, 0.18);
+  }
+}
+
+/** Where a coat breaks to its edge color. Full coats stay at 0; thin coats approach `breakStrength`. */
+export const GLAZE_BREAK_START_MM = 0.05;
+export const GLAZE_BREAK_FULL_MM = 0.26;
+
+export function glazeBreakAmount(thicknessMm: number, breakStrength: number, edge = 0): number {
+  const span = GLAZE_BREAK_FULL_MM - GLAZE_BREAK_START_MM;
+  const t = span <= 0 ? 1 : (thicknessMm - GLAZE_BREAK_START_MM) / span;
+  const clamped = Math.min(1, Math.max(0, t));
+  const curved = clamped * clamped * (3 - 2 * clamped);
+  const thin = 1 - curved;
+  const along = 0.8 + 0.2 * Math.min(1, Math.max(0, edge));
+  return Math.min(1, Math.max(0, thin * breakStrength * along));
 }
 
 function glazeHook(shader: ClayShader): void {
@@ -225,12 +258,15 @@ const COLOR_GLSL = /* glsl */ `
       } else {
         vec3 pwFired = texture2D(uPwColor, vec2(pwUvId.x, 1.5 / 3.0)).rgb;
         vec3 pwBreakCol = texture2D(uPwColor, vec2(pwUvId.x, 2.5 / 3.0)).rgb;
-        float pwBreakAmt = clamp(pwEdge * pwBreak, 0.0, 1.0);
+        float pwThin = 1.0 - smoothstep(${GLAZE_BREAK_START_MM}, ${GLAZE_BREAK_FULL_MM}, pwThick);
+        float pwBreakAmt = clamp(pwThin * pwBreak * mix(0.8, 1.0, pwEdge), 0.0, 1.0);
         float pwRecess = (1.0 - smoothstep(0.02, 0.4, pwEdge)) * smoothstep(0.28, 1.15, pwThick) * pwPool;
         vec3 pwGlaze = mix(pwFired, pwBreakCol, pwBreakAmt);
         pwGlaze *= mix(1.0, 0.62, clamp(pwRecess, 0.0, 1.0));
-        float pwCoat = smoothstep(0.02, 0.28, pwThick) * pwCover;
-        float pwBare = pwBreakAmt * (1.0 - smoothstep(0.18, 0.55, pwThick));
+        float pwCovering = smoothstep(0.01, 0.07, pwThick);
+        float pwTranslucent = smoothstep(0.02, 0.28, pwThick);
+        float pwCoat = mix(pwTranslucent, pwCovering, pwCover) * pwCover;
+        float pwBare = (1.0 - pwCover) * (1.0 - smoothstep(0.04, 0.16, pwThick));
         diffuseColor.rgb = mix(pwClay, pwGlaze, clamp(pwCoat * (1.0 - pwBare), 0.0, 1.0));
         float pwHash = fract(sin(dot(floor(vPwUv * vec2(64.0)), vec2(127.1, 311.7))) * 43758.5453);
         float pwCrawl = step(pwCrawlAt, pwThick) * step(0.58, pwHash);
@@ -264,5 +300,7 @@ const COAT_GLSL = /* glsl */ `
 if (uPwFire > -0.5 && uPwFire < 0.5) {
   material.clearcoat = 0.02;
   material.clearcoatRoughness = 0.8;
+} else if (uPwFire > 0.5) {
+  material.metalness = 0.0;
 }
 `;

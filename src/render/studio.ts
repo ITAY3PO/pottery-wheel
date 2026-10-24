@@ -25,6 +25,7 @@ import {
 } from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { getClay } from '../clay/clays';
+import { dressAttachmentMaterial } from '../firing/look';
 import { maxOuterAtRing, pieceHeight } from '../clay/grid';
 import type { Attachment, MeshSurface, PieceState, SurfaceHit } from '../core/types';
 import { buildAttachmentGeometry } from './attachmentMesh';
@@ -169,8 +170,10 @@ export class Studio {
     this.clayMesh.update(piece.grid);
     if (this.finishStage !== piece.stage || this.finishClay !== piece.clayTypeId) {
       const clay = getClay(piece.clayTypeId);
-      for (const material of clayMaterialsSharingHooks(this.ensureBodyMaterial())) {
+      const bodyMaterial = this.ensureBodyMaterial();
+      for (const material of clayMaterialsSharingHooks(bodyMaterial)) {
         applyClayFinish(material, clay, piece.stage);
+        if (material !== bodyMaterial) dressAttachmentMaterial(material);
       }
       this.finishStage = piece.stage;
       this.finishClay = piece.clayTypeId;
@@ -335,7 +338,9 @@ export class Studio {
           this.releaseAttachment(mesh);
           this.attachmentMeshes.delete(attachment.id);
         }
-        mesh = new Mesh(buildAttachmentGeometry(attachment), cloneClayMaterial(this.ensureBodyMaterial()));
+        const material = cloneClayMaterial(this.ensureBodyMaterial());
+        dressAttachmentMaterial(material);
+        mesh = new Mesh(buildAttachmentGeometry(attachment), material);
         bindSurfaceUniforms(mesh);
         mesh.userData.signature = signature;
         mesh.userData.meshId = attachment.id;
