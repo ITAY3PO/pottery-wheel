@@ -12,6 +12,7 @@ import type { ClayTypeId, PieceState, Stage, SurfaceHit, Tool, ToolContext, Tool
 import { Vector3 } from 'three';
 import { Studio } from './render/studio';
 import { stepTrimChips } from './tools/trim-chips';
+import { Onboarding } from './ui/onboarding/onboarding';
 import { Shell, type ShellModel } from './ui/shell/shell';
 import { Wheel } from './core/wheel';
 import { installAudio } from './audio';
@@ -115,6 +116,23 @@ const shell = new Shell(app, {
     publish();
     events.emit('piece-change', { piece: null });
   },
+  onHelp: () => onboarding.replay(),
+});
+
+let onboarding: Onboarding;
+onboarding = new Onboarding({
+  app,
+  chrome: shell.chrome,
+  stepperSlot: shell.stepperSlot,
+  tipSlot: shell.tipSlot,
+  tools,
+  stages,
+  onStep: (id) => {
+    if (activeToolId === id) return;
+    activeToolId = id;
+    publish();
+  },
+  onLayout: () => resize(),
 });
 
 window.addEventListener('resize', () => resize());
@@ -127,6 +145,8 @@ installAudio({
   getPointer: () => (toolDown && previous ? previous : null),
   getTool: () => activeToolId,
 });
+const mute = document.getElementById('pw-mute');
+if (mute) shell.topbar.append(mute);
 requestAnimationFrame(frame);
 
 canvas.addEventListener('contextmenu', (event) => event.preventDefault());
@@ -204,6 +224,7 @@ function frame(now: number): void {
     publish();
   } else if (piece.onWheel) {
     shell.render(model());
+    onboarding.sync(piece);
   }
   events.emit('frame', { dt: elapsed, piece });
   requestAnimationFrame(frame);
@@ -463,6 +484,7 @@ function publish(): void {
   app?.setAttribute('data-stage', piece ? piece.stage : 'setup');
   app?.setAttribute('data-on-wheel', piece?.onWheel ? 'true' : 'false');
   shell.render(view);
+  onboarding.sync(piece);
   resize();
 }
 
@@ -496,12 +518,20 @@ function toast(text: string): void {
 function resize(): void {
   const width = app?.clientWidth ?? window.innerWidth;
   const height = app?.clientHeight ?? window.innerHeight;
-  // A full-width sheet (portrait) covers the bottom, so the canvas is only
-  // the part above it. A centered desktop sheet leaves the sides open, and
-  // the camera shifts the clay up instead of cropping the view.
-  const covers = shell.sheetWidth > width * 0.92;
-  const viewH = covers ? Math.max(180, height - shell.sheetHeight) : height;
-  studio.setSize(width, viewH, covers ? 0 : shell.sheetHeight);
+  const rect = shell.chrome.getBoundingClientRect();
+  if (app instanceof HTMLElement) app.style.setProperty('--chrome-block', `${Math.round(rect.height)}px`);
+  // Portrait: the chrome covers the bottom, so the canvas is only the part
+  // above it. A centered desktop chrome leaves the sides open and the camera
+  // shifts the clay up. Phone landscape docks the chrome on the right; the
+  // canvas keeps the strip to its left so the clay stays in reach.
+  const sideDock = window.matchMedia('(orientation: landscape) and (max-height: 540px) and (max-width: 980px)').matches;
+  if (sideDock) {
+    studio.setSize(Math.max(160, Math.round(width - rect.width)), height, 0);
+    return;
+  }
+  const covers = rect.width > width * 0.92;
+  const viewH = covers ? Math.max(160, Math.round(height - rect.height)) : height;
+  studio.setSize(width, viewH, covers ? 0 : rect.height);
 }
 
 function onKey(event: KeyboardEvent): void {
