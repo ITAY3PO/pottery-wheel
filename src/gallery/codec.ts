@@ -18,8 +18,12 @@ import { projectPiece } from './resample';
  * hash is too long for a chat app, the grid and surface maps step down.
  */
 export const SHARE_HASH_BUDGET = 3500;
+/** Reject anything longer than this before base64 or inflate. */
+export const SHARE_HASH_MAX_CHARS = 16_000;
+/** Stop inflate once the output passes this, so a short hash cannot expand without limit. */
+export const SHARE_INFLATE_MAX_BYTES = 2 * 1024 * 1024;
 const HASH_PREFIX = 'p1.';
-const HARD_HASH_LIMIT = 20000;
+const HARD_HASH_LIMIT = SHARE_HASH_MAX_CHARS;
 
 const CLAYS: readonly ClayTypeId[] = ['stoneware', 'porcelain', 'earthenware'];
 const STAGES: readonly StageId[] = ['wet', 'leather-hard', 'bone-dry', 'bisque', 'glazed', 'glaze-fired'];
@@ -90,10 +94,11 @@ export async function encodeShare(
 export async function decodeShare(input: string): Promise<PieceState | null> {
   if (!canCompress()) return null;
   const hash = hashPayload(input);
-  if (!hash) return null;
+  if (!hash || HASH_PREFIX.length + hash.length > SHARE_HASH_MAX_CHARS) return null;
   try {
     const compressed = base64UrlToBytes(hash);
-    const payload = await inflateRaw(compressed);
+    const payload = await inflateRaw(compressed, SHARE_INFLATE_MAX_BYTES);
+    if (!payload) return null;
     return unpackPiece(payload);
   } catch {
     return null;
@@ -661,11 +666,36 @@ async function deflateRaw(data: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
+async function inflateRaw(data: Uint8Array, maxBytes: number): Promise<Uint8Array | null> {
   const copy = new Uint8Array(data.byteLength);
   copy.set(data);
   const stream = new Blob([copy]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value?.byteLength) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    await reader.cancel().catch(() => undefined);
+    return null;
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
 }
 
 function bytesToBase64Url(bytes: Uint8Array): string {

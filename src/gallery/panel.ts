@@ -49,11 +49,18 @@ export function mountGallery(options: { root: HTMLElement; currentPiece: () => P
   canvas.setAttribute('aria-hidden', 'true');
   const caption = document.createElement('p');
   caption.className = 'gal-caption';
-  const sheet = document.createElement('section');
+  const chrome = document.createElement('section');
+  chrome.className = 'sheet-chrome';
+  const sheet = document.createElement('div');
   sheet.className = 'sheet';
   const body = document.createElement('div');
   sheet.append(body);
-  layer.append(canvas, caption, sheet);
+  const closeRow = document.createElement('div');
+  closeRow.className = 'gal-close';
+  const closeButton = textButton('Close', 'ghost', () => close());
+  closeRow.append(closeButton);
+  chrome.append(sheet, closeRow);
+  layer.append(canvas, caption, chrome);
   options.root.append(entry, layer);
 
   let mode: Mode = { kind: 'browse' };
@@ -128,7 +135,7 @@ export function mountGallery(options: { root: HTMLElement; currentPiece: () => P
     fromHash = true;
     if (!piece) {
       mode = { kind: 'browse' };
-      status = 'That share link is incomplete. The shelf is here.';
+      status = 'That link is invalid. The shelf is here.';
       selectedId = listGallery()[0]?.id ?? null;
     } else {
       mode = { kind: 'shared', piece };
@@ -146,7 +153,7 @@ export function mountGallery(options: { root: HTMLElement; currentPiece: () => P
     render();
     present();
     if (opening) {
-      const target = body.querySelector('button');
+      const target = body.querySelector('button') ?? closeButton;
       if (target instanceof HTMLElement) target.focus();
     }
   }
@@ -175,7 +182,7 @@ export function mountGallery(options: { root: HTMLElement; currentPiece: () => P
       setStatus('This saved pot is damaged. You can delete it.');
     }
     if (!turntable) return;
-    if (piece) turntable.show(piece, () => sheet.offsetHeight);
+    if (piece) turntable.show(piece, panelLift);
     else turntable.idle();
   }
 
@@ -202,8 +209,16 @@ export function mountGallery(options: { root: HTMLElement; currentPiece: () => P
     note.textContent = status;
     body.append(note);
 
-    const closeLabel = mode.kind === 'shared' ? 'Back to the wheel' : returnToBrowse && mode.kind === 'share' ? 'Back' : 'Close';
-    body.append(textButton(closeLabel, 'linkish', close));
+    closeButton.textContent = mode.kind === 'shared' ? 'Back to the wheel' : returnToBrowse && mode.kind === 'share' ? 'Back' : 'Close';
+  }
+
+  /** Bottom sheets cover the view from below. A side panel in landscape does not. */
+  function panelLift(): number {
+    const rect = chrome.getBoundingClientRect();
+    const viewH = Math.max(1, layer.clientHeight);
+    const viewW = Math.max(1, layer.clientWidth);
+    if (rect.width < viewW * 0.75 && rect.top < viewH * 0.2) return 0;
+    return Math.max(0, viewH - rect.top);
   }
 
   function renderBrowse(): void {

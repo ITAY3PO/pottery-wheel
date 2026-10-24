@@ -1,6 +1,7 @@
 import type { PieceState } from '../core/types';
 import { bindGallery } from './actions';
 import './gallery.css';
+import { bindShareHash } from './hash';
 import { mountGallery } from './panel';
 
 /**
@@ -11,5 +12,7 @@ import { mountGallery } from './panel';
 export function startGallery(options: { root: HTMLElement; currentPiece: () => PieceState | null }): void {
   const panel = mountGallery(options);
   bindGallery(panel);
-  if (window.location.hash.includes('p1.')) void panel.openShared(window.location.hash);
+  bindShareHash(window, () => window.location.hash, (hash) => {
+    void panel.openShared(hash);
+  });
 }

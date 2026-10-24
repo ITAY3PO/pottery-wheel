@@ -2,19 +2,19 @@
 .gal-entry {
   position: absolute;
   z-index: 4;
-  top: calc(72px + env(safe-area-inset-top));
-  left: 18px;
-  min-height: 44px;
-  min-width: 44px;
+  top: calc(72px + var(--safe-top));
+  left: calc(18px + var(--safe-left));
+  min-height: var(--touch);
+  min-width: var(--touch);
   padding: 0 16px;
   border: 0;
   border-radius: 999px;
-  background: rgba(243, 236, 223, 0.94);
+  background: var(--paper);
   color: var(--ink);
   font: inherit;
   font-size: 15px;
   font-weight: 640;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  box-shadow: 0 8px 24px rgba(28, 22, 19, 0.28);
   touch-action: manipulation;
 }
 
@@ -26,7 +26,7 @@
   position: fixed;
   inset: 0;
   z-index: 8;
-  background: #2a211c;
+  background: var(--studio);
 }
 
 .gal-layer[hidden] {
@@ -36,12 +36,12 @@
 .gal-caption {
   position: absolute;
   z-index: 1;
-  top: calc(14px + env(safe-area-inset-top));
-  left: 18px;
-  right: 18px;
+  top: calc(14px + var(--safe-top));
+  left: calc(18px + var(--safe-left));
+  right: calc(18px + var(--safe-right));
   margin: 0;
-  color: #f7f1e8;
-  font-family: Fraunces, Georgia, "Iowan Old Style", serif;
+  color: var(--cream);
+  font-family: var(--display);
   font-size: 28px;
   font-style: italic;
   font-weight: 560;
@@ -78,7 +78,7 @@
 
 .gal-pick[aria-pressed="true"] {
   border-color: var(--clay);
-  background: #fffaf4;
+  background: var(--paper-raised);
 }
 
 .gal-pick strong {
@@ -112,7 +112,17 @@
 .gal-delete[aria-pressed="true"] {
   background: var(--clay-deep);
   border-color: var(--clay-deep);
-  color: #fffaf6;
+  color: var(--on-clay);
+}
+
+.gal-close {
+  flex: 0 0 auto;
+  padding: 4px 16px 12px;
+}
+
+.gal-close .ghost {
+  width: 100%;
+  min-height: var(--touch);
 }
 
 .gal-link {
@@ -132,12 +142,18 @@
 
 .gal-link input {
   width: 100%;
-  min-height: 44px;
+  min-height: var(--touch);
   padding: 0 12px;
   border: 1.5px solid var(--line);
   border-radius: 12px;
-  background: #fffaf4;
+  background: var(--paper-raised);
   color: var(--ink);
   font: inherit;
   font-size: 14px;
+}
+
+@media (orientation: landscape) and (max-height: 540px) and (max-width: 980px) {
+  .gal-caption {
+    right: calc(min(340px, 46vw) + 12px + var(--safe-right));
+  }
 }

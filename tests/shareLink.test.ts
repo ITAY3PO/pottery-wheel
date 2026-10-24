@@ -3,7 +3,8 @@ import { createCylinderGrid, freezeProfile, pieceHeight } from '../src/clay/grid
 import { createPiece, deserializePiece, serializePiece } from '../src/core/piece';
 import { createSurfaceMap } from '../src/core/surfaceMap';
 import type { PieceState } from '../src/core/types';
-import { decodeShare, encodeShare, SHARE_HASH_BUDGET, withShareHash } from '../src/gallery/codec';
+import { decodeShare, encodeShare, SHARE_HASH_BUDGET, SHARE_HASH_MAX_CHARS, SHARE_INFLATE_MAX_BYTES, withShareHash } from '../src/gallery/codec';
+import { bindShareHash } from '../src/gallery/hash';
 
 function pieceFrom(grid: ReturnType<typeof createCylinderGrid>, patch: Partial<PieceState> = {}): PieceState {
   const now = 1_700_000_000_000;
@@ -153,5 +154,40 @@ describe('share links', () => {
     expect(await decodeShare('#nope')).toBeNull();
     expect(await decodeShare('#p1.!!!!')).toBeNull();
     expect(await decodeShare('https://itay3po.github.io/pottery-wheel/#about')).toBeNull();
+  });
+
+  it('rejects a hash longer than the raw cap without decoding it', async () => {
+    const hash = `#p1.${'A'.repeat(SHARE_HASH_MAX_CHARS)}`;
+    await expect(decodeShare(hash)).resolves.toBeNull();
+  });
+
+  it('rejects a short hash that inflates past the byte cap', async () => {
+    const zeros = new Uint8Array(SHARE_INFLATE_MAX_BYTES + 64);
+    const compressed = new Uint8Array(
+      await new Response(new Blob([zeros]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer(),
+    );
+    let binary = '';
+    for (let i = 0; i < compressed.length; i++) binary += String.fromCharCode(compressed[i] ?? 0);
+    const hash = `p1.${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')}`;
+    expect(hash.length).toBeLessThan(SHARE_HASH_MAX_CHARS);
+    await expect(decodeShare(hash)).resolves.toBeNull();
+  });
+
+  it('opens a share hash on load and again when the hash changes', () => {
+    const listeners: Array<() => void> = [];
+    const opened: string[] = [];
+    let hash = '#p1.first';
+    bindShareHash(
+      { addEventListener: (_type, listener) => listeners.push(listener) },
+      () => hash,
+      (value) => opened.push(value),
+    );
+    expect(opened).toEqual(['#p1.first']);
+    hash = '#p1.pasted';
+    listeners[0]?.();
+    hash = '#about';
+    listeners[0]?.();
+    expect(opened).toEqual(['#p1.first', '#p1.pasted']);
+    expect(listeners).toHaveLength(1);
   });
 });
