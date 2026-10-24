@@ -1,5 +1,6 @@
 import { getClay } from '../clay/clays';
 import { freezeProfile, meanMoisture, scaleGrid } from '../clay/grid';
+import { events } from './events';
 import { ensureBodySurface } from './surfaceMap';
 import type { PieceState, StageId } from './types';
 
@@ -67,6 +68,7 @@ export function shrinkageScale(shrinkage: number, from: StageId, to: StageId): n
  */
 export function transition(piece: PieceState, to: StageId): boolean {
   if (!canTransition(piece.stage, to)) return false;
+  const from = piece.stage;
   const clay = getClay(piece.clayTypeId);
   const scale = shrinkageScale(clay.shrinkage, piece.stage, to);
   if (scale !== 1) scaleGrid(piece.grid, scale);
@@ -77,6 +79,7 @@ export function transition(piece: PieceState, to: StageId): boolean {
   if (!piece.grid.uvFrozen) freezeProfile(piece.grid);
   ensureBodySurface(piece);
   piece.updatedAt = Date.now();
+  events.emit('stage-change', { piece, from, to });
   return true;
 }
 
@@ -96,6 +99,7 @@ export function removeFromWheel(piece: PieceState): void {
   if (!piece.grid.uvFrozen) freezeProfile(piece.grid);
   ensureBodySurface(piece);
   piece.updatedAt = Date.now();
+  events.emit('wire-cut', { piece });
 }
 
 /** Leather-hard trimming goes back on the head. Other stages stay put. */

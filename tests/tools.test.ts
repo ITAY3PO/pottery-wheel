@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { Raycaster } from 'three';
 import { getClay } from '../src/clay/clays';
 import {
   clayIndex,
@@ -9,8 +10,9 @@ import {
   volume,
 } from '../src/clay/grid';
 import { evaluateIntegrity } from '../src/clay/integrity';
+import { events } from '../src/core/events';
 import { loadTools, toolsFor } from '../src/core/registry';
-import type { ClayGrid, PieceState, Tool, ToolPointer } from '../src/core/types';
+import type { ClayGrid, PieceState, Tool, ToolContext, ToolPointer } from '../src/core/types';
 import { Wheel } from '../src/core/wheel';
 import { tool as knife } from '../src/tools/knife';
 import { tool as needle } from '../src/tools/needle';
@@ -19,6 +21,7 @@ import { tool as sponge } from '../src/tools/sponge';
 import { tool as water } from '../src/tools/water';
 
 const stoneware = getClay('stoneware');
+const raycaster = new Raycaster();
 
 function pieceWith(grid: ClayGrid): PieceState {
   return {
@@ -68,7 +71,19 @@ function run(
       pressure: options.pressure ?? 0.92,
       segment: options.segment ?? 0,
     });
-    const ctx = { piece, wheel, pointer, previous, dt: 1 / 60 };
+    const ctx: ToolContext = {
+      piece,
+      wheel,
+      pointer,
+      previous,
+      dt: 1 / 60,
+      screen: { x: 0, y: 0 },
+      ndc: { x: 0, y: 0 },
+      raycaster,
+      surfaceHit: null,
+      markSurfaceDirty() {},
+      events,
+    };
     if (i === 0) tool.onPointerDown(ctx);
     else tool.onPointerMove(ctx);
     previous = pointer;

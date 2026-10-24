@@ -40,10 +40,17 @@ function pot(): PieceState {
 function ctx(
   piece: PieceState,
   point: { x: number; y: number; z: number },
-  extra: { pressure?: number; hit?: HandHit; ray?: HandRay; mark?: (meshId: string) => void } = {},
+  extra: {
+    pressure?: number;
+    hit?: HandHit;
+    ray?: HandRay;
+    raycaster?: { ray: HandRay };
+    mark?: (meshId: string) => void;
+    angle?: number;
+  } = {},
 ): ToolContext {
   const wheel = new Wheel();
-  wheel.angle = 0;
+  wheel.angle = extra.angle ?? 0;
   return {
     piece,
     wheel,
@@ -58,10 +65,14 @@ function ctx(
     },
     previous: null,
     dt: 0.016,
-    surfaceHit: extra.hit,
+    surfaceHit: extra.hit ?? null,
     ray: extra.ray,
-    markSurfaceDirty: extra.mark,
-  } as ToolContext;
+    raycaster: extra.raycaster,
+    markSurfaceDirty: extra.mark ?? (() => {}),
+    screen: { x: 0, y: 0 },
+    ndc: { x: 0, y: 0 },
+    events: { on: () => () => {}, off() {}, emit() {} },
+  } as unknown as ToolContext;
 }
 
 /** Ray from +Z through a piece-local point on the z=0 drawing plane. */
@@ -172,6 +183,28 @@ describe('placement from the tool ray and surface hit', () => {
     expect(sample?.air.x).toBeCloseTo(0.08, 4);
     expect(sample?.air.y).toBeCloseTo(0.05, 4);
     expect(sample?.air.z).toBeCloseTo(0, 4);
+  });
+
+  it('reads the tool raycaster and keeps a piece-local hit where it landed', () => {
+    const piece = pot();
+    const sample = placeSample(
+      ctx(piece, { x: 0, y: 0, z: 0 }, {
+        angle: Math.PI / 2,
+        raycaster: { ray: rayThrough({ x: 0.08, y: 0.05 }) },
+        hit: {
+          meshId: 'body',
+          u: 0.25,
+          v: 0.5,
+          point: { x: 0.02, y: 0.03, z: 0.04 },
+          normal: { x: 0, y: 0, z: 1 },
+        },
+      }),
+    );
+    expect(sample?.air.y).toBeCloseTo(0.05, 4);
+    expect(sample?.air.z).toBeCloseTo(0.08, 4);
+    expect(sample?.contact).toEqual({ x: 0.02, y: 0.03, z: 0.04 });
+    expect(sample?.normal).toEqual({ x: 0, y: 0, z: 1 });
+    expect(sample?.body?.x).toBeCloseTo(0.045, 3);
   });
 
   it('reads a body hit as a point on the outer wall', () => {

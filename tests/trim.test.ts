@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { Raycaster } from 'three';
 import { centeredness, createCylinderGrid, meanChannel, pieceHeight, volume } from '../src/clay/grid';
+import { events } from '../src/core/events';
 import { createPiece, deserializePiece, serializePiece } from '../src/core/piece';
 import { loadStages, loadTools, toolsFor } from '../src/core/registry';
 import { remountOnWheel, skipDrying, transition } from '../src/core/stateMachine';
@@ -10,6 +12,7 @@ import { activeTrimChips, resetTrimChips, spawnTrimChips, stepTrimChips } from '
 import { baseIsPierced, flipGrid, isBaseUp, isSeated, mountBaseUp, unmountUpright } from '../src/tools/trim-pose';
 
 const spin: TrimStroke = { pressure: 0.95, omega: 16, segment: 0, dt: 0.05 };
+const raycaster = new Raycaster();
 const HOLLOW = 0.0016;
 
 function leatherPot(): PieceState {
@@ -306,6 +309,12 @@ describe('trimming chips and registry', () => {
       pointer: { radius: 0.028, height, pressure: 0.9, side: 1, segment: 0, x: 0.028, y: height },
       previous: null,
       dt: 0.05,
+      screen: { x: 0, y: 0 },
+      ndc: { x: 0, y: 0 },
+      raycaster,
+      surfaceHit: null,
+      markSurfaceDirty() {},
+      events,
     };
     tool?.onPointerDown(ctx);
     expect(activeTrimChips().length).toBeGreaterThan(0);

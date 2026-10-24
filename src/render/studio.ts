@@ -26,12 +26,26 @@ import {
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { getClay } from '../clay/clays';
 import { maxOuterAtRing, pieceHeight } from '../clay/grid';
-import type { Attachment, MeshSurface, PieceState } from '../core/types';
+import type { Attachment, MeshSurface, PieceState, SurfaceHit } from '../core/types';
 import { buildAttachmentGeometry } from './attachmentMesh';
 import { CameraRig } from './cameraRig';
 import { ClayMesh } from './clayMesh';
-import { applyClayFinish } from './materials';
-import { createSurfaceTextures, type SurfaceTextures } from './surfaceTextures';
+import { raycastToUV } from './raycastUV';
+import {
+  applyClayFinish,
+  bindSurfaceUniforms,
+  clayMaterialsSharingHooks,
+  cloneClayMaterial,
+  createClayMaterial,
+  setClayRootMaterial,
+} from './materials';
+import {
+  createSurfaceTextures,
+  disposeSurfaceTextures,
+  markSurfaceTexturesDirty,
+  surfaceTexturesMatch,
+  type SurfaceTextures,
+} from './surfaceTextures';
 
 export class Studio {
   readonly renderer: WebGLRenderer;
@@ -43,6 +57,8 @@ export class Studio {
   private readonly attachmentRoot = new Group();
   private readonly attachmentMeshes = new Map<string, Mesh>();
   private readonly surfaceCache = new Map<string, SurfaceTextures>();
+  private surfacePieceId: string | null = null;
+  private bodyMaterial: MeshPhysicalMaterial | null = null;
   private finishStage = '';
   private finishClay = '';
   private releaseAngle = 0;
@@ -106,6 +122,9 @@ export class Studio {
     this.wire.rotation.z = Math.PI / 2;
     this.wire.visible = false;
     this.scene.add(this.wire);
+
+    this.bodyMaterial = createClayMaterial();
+    setClayRootMaterial(this.bodyMaterial);
   }
 
   setSize(width: number, height: number, sheetHeight: number): void {
@@ -117,13 +136,21 @@ export class Studio {
   syncPiece(piece: PieceState | null): void {
     if (!piece) {
       if (this.clayMesh) {
+        delete this.clayMesh.mesh.userData.surfaceTextures;
         this.clayPivot.remove(this.clayMesh.mesh);
         this.clayMesh.geometry.dispose();
         this.clayMesh = null;
       }
       this.clearAttachments();
+      this.clearSurfaceCache();
+      this.surfacePieceId = null;
       this.rig.frameWheel();
       return;
+    }
+    if (this.surfacePieceId !== piece.id) {
+      this.clearSurfaceCache();
+      this.forgetSurfaceBindings();
+      this.surfacePieceId = piece.id;
     }
     if (
       !this.clayMesh ||
@@ -134,15 +161,16 @@ export class Studio {
         this.clayPivot.remove(this.clayMesh.mesh);
         this.clayMesh.geometry.dispose();
       }
-      this.clayMesh = new ClayMesh(piece.grid.rings, piece.grid.segments);
+      this.clayMesh = new ClayMesh(piece.grid.rings, piece.grid.segments, this.ensureBodyMaterial());
+      bindSurfaceUniforms(this.clayMesh.mesh);
       this.clayPivot.add(this.clayMesh.mesh);
       this.finishStage = '';
     }
     this.clayMesh.update(piece.grid);
     if (this.finishStage !== piece.stage || this.finishClay !== piece.clayTypeId) {
-      const material = this.clayMesh.mesh.material;
-      if (material instanceof MeshPhysicalMaterial) {
-        applyClayFinish(material, getClay(piece.clayTypeId), piece.stage);
+      const clay = getClay(piece.clayTypeId);
+      for (const material of clayMaterialsSharingHooks(this.ensureBodyMaterial())) {
+        applyClayFinish(material, clay, piece.stage);
       }
       this.finishStage = piece.stage;
       this.finishClay = piece.clayTypeId;
@@ -175,14 +203,14 @@ export class Studio {
     this.wheelPivot.rotation.y = angle;
   }
 
-  showContact(visible: boolean, x: number, y: number, pressure: number): void {
+  showContact(visible: boolean, x: number, y: number, pressure: number, toolId = ''): void {
     this.contact.visible = false;
     for (const mesh of this.toolContacts.values()) mesh.visible = false;
     if (!visible) return;
-    // The sheet already marks the active chip. Reading it here keeps a
-    // distinct contact marker without a per-tool branch in the frame loop.
-    const id = activeToolId();
-    const mesh = this.toolContacts.get(id) ?? this.contact;
+    // Core passes the active tool id. Markers stay in sync with the sheet chip
+    // without reading the DOM mid-gesture.
+    const id = toolId;
+    const mesh = (id && this.toolContacts.get(id)) || this.contact;
     mesh.visible = true;
     const yPos = Math.max(0, y);
     mesh.position.set(x, yPos, id === 'water' ? 0.018 : 0.014);
@@ -240,6 +268,18 @@ export class Studio {
     return meshes;
   }
 
+  /** UV hit from the ray `CameraRig.aimPointer` just aimed. */
+  hitTest(): SurfaceHit | null {
+    this.clayPivot.updateWorldMatrix(true, true);
+    return raycastToUV(this.rig.pointerRaycaster, this.bodyObjects());
+  }
+
+  /** Upload the cached GPU copy after a tool paints this mesh's surface map. */
+  markSurfaceDirty(meshId: string): void {
+    const textures = this.surfaceCache.get(meshId);
+    if (textures) markSurfaceTexturesDirty(textures);
+  }
+
   render(dt: number): void {
     this.rig.update(dt);
     this.renderer.render(this.scene, this.rig.camera);
@@ -253,6 +293,11 @@ export class Studio {
 
   private ensureTextures(mesh: Mesh, surface: MeshSurface): void {
     let textures = this.surfaceCache.get(surface.meshId);
+    if (textures && !surfaceTexturesMatch(textures, surface.map)) {
+      disposeSurfaceTextures(textures);
+      this.surfaceCache.delete(surface.meshId);
+      textures = undefined;
+    }
     if (!textures) {
       textures = createSurfaceTextures(surface.map);
       this.surfaceCache.set(surface.meshId, textures);
@@ -265,28 +310,24 @@ export class Studio {
     const live = new Set(piece.attachments.map((attachment) => attachment.id));
     for (const [id, mesh] of this.attachmentMeshes) {
       if (live.has(id)) continue;
-      this.attachmentRoot.remove(mesh);
-      mesh.geometry.dispose();
+      this.releaseAttachment(mesh);
       this.attachmentMeshes.delete(id);
       const cached = this.surfaceCache.get(id);
-      cached?.glazeId.dispose();
-      cached?.thickness.dispose();
-      cached?.wax.dispose();
-      cached?.underglaze.dispose();
-      this.surfaceCache.delete(id);
+      if (cached) {
+        disposeSurfaceTextures(cached);
+        this.surfaceCache.delete(id);
+      }
     }
-    const clayMaterial = this.clayMesh?.mesh.material;
     for (const attachment of piece.attachments) {
       const signature = attachmentSignature(attachment);
       let mesh = this.attachmentMeshes.get(attachment.id);
       if (!mesh || mesh.userData.signature !== signature) {
         if (mesh) {
-          this.attachmentRoot.remove(mesh);
-          mesh.geometry.dispose();
+          this.releaseAttachment(mesh);
+          this.attachmentMeshes.delete(attachment.id);
         }
-        const material =
-          clayMaterial instanceof MeshPhysicalMaterial ? clayMaterial : new MeshPhysicalMaterial({ color: 0x7a5644 });
-        mesh = new Mesh(buildAttachmentGeometry(attachment), material);
+        mesh = new Mesh(buildAttachmentGeometry(attachment), cloneClayMaterial(this.ensureBodyMaterial()));
+        bindSurfaceUniforms(mesh);
         mesh.userData.signature = signature;
         mesh.userData.meshId = attachment.id;
         this.attachmentRoot.add(mesh);
@@ -298,17 +339,34 @@ export class Studio {
   }
 
   private clearAttachments(): void {
-    for (const mesh of this.attachmentMeshes.values()) {
-      this.attachmentRoot.remove(mesh);
-      mesh.geometry.dispose();
-    }
+    for (const mesh of this.attachmentMeshes.values()) this.releaseAttachment(mesh);
     this.attachmentMeshes.clear();
   }
-}
 
-function activeToolId(): string {
-  if (typeof document === 'undefined') return '';
-  return document.querySelector<HTMLElement>('.tool[aria-pressed="true"]')?.dataset.tool ?? '';
+  private releaseAttachment(mesh: Mesh): void {
+    this.attachmentRoot.remove(mesh);
+    mesh.geometry.dispose();
+    const material = mesh.material;
+    if (material instanceof MeshPhysicalMaterial && material !== this.bodyMaterial) material.dispose();
+  }
+
+  private ensureBodyMaterial(): MeshPhysicalMaterial {
+    if (!this.bodyMaterial) {
+      this.bodyMaterial = createClayMaterial();
+      setClayRootMaterial(this.bodyMaterial);
+    }
+    return this.bodyMaterial;
+  }
+
+  private clearSurfaceCache(): void {
+    for (const textures of this.surfaceCache.values()) disposeSurfaceTextures(textures);
+    this.surfaceCache.clear();
+  }
+
+  private forgetSurfaceBindings(): void {
+    if (this.clayMesh) delete this.clayMesh.mesh.userData.surfaceTextures;
+    for (const mesh of this.attachmentMeshes.values()) delete mesh.userData.surfaceTextures;
+  }
 }
 
 /** Contact markers for the throwing tools. Names match `data-tool` on the sheet. */

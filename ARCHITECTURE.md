@@ -17,6 +17,7 @@ The app is Vite + TypeScript + Three.js, with a plain DOM overlay. There is no R
 | `src/handbuild` | handbuild agent | Handles and coils. Stub: `handles.ts` |
 | `src/surface` | surface agent | Glaze and wax. Stubs: `glaze.ts`, `wax.ts` |
 | `src/firing` | firing agent | Kiln. Stub: `kiln.ts` |
+| `src/audio`, `src/gallery`, `src/onboarding` | those agents | Side-effect modules. `src/core/listeners.ts` loads them with `import.meta.glob` after the event bus exists. Subscribe to `events` from a file in that folder. Do not edit `main.ts` |
 
 Registries use `import.meta.glob` in `src/core/registry.ts`:
 
@@ -108,20 +109,36 @@ Shaping entry points, all pure and unit-tested: `centerClay`, `pressIn`, `openCe
 
 The studio is one warm directional light plus a `RoomEnvironment` PMREM. No shadow maps. `devicePixelRatio` is capped at 2. Wet clay is a `MeshPhysicalMaterial` (low roughness, high clearcoat, a little sheen).
 
-### Material hooks (firing)
+### Material hooks (firing and glaze)
 
-Do not replace the clay material. Append a shader hook:
+Do not replace the clay material class. The studio keeps one body `MeshPhysicalMaterial` (`clayRootMaterial()`, registered at startup). Each attachment mesh gets its **own instance** from `cloneClayMaterial(body)`. Clones share the hook list and the program-cache key, so one `addClayShaderHook` recompiles every clay material. A shared material would show the body's glaze maps on a handle.
+
+Call the hook once the studio exists (the `frame` or `piece-change` event), not at import time:
 
 ```ts
-addClayShaderHook(material, (shader) => {
-  shader.uniforms.uGlaze = { value: mesh.userData.surfaceTextures.glazeId };
-  // edit shader.fragmentShader / vertexShader
-}, 'glaze-fire');
+import { addClayShaderHook, clayRootMaterial } from './render/materials';
+
+const material = clayRootMaterial();
+if (material) {
+  addClayShaderHook(material, (shader) => {
+    // sample uSurfaceGlaze, uSurfaceThickness, uSurfaceWax, uSurfaceUnderglaze
+    // edit shader.fragmentShader / vertexShader
+  }, 'glaze-fire');
+}
 ```
 
-`onBeforeCompile` runs every hook already registered. `customProgramCacheKey` changes when hooks are added. `applyClayFinish(material, clay, stage)` sets color, roughness, and clearcoat from the lifecycle stage; a glaze shader should multiply on top of that, not fight it.
+Do not assign those uniform values from a single mesh inside the hook. Before each mesh draws, core points them at that mesh's `userData.surfaceTextures` (or a 1×1 zero texture when the mesh has no map yet):
 
-Glaze textures for a mesh are stashed on `mesh.userData.surfaceTextures` and `mesh.userData.meshId`.
+| Uniform | Map |
+| --- | --- |
+| `uSurfaceGlaze` | `glazeId` (byte, linear) |
+| `uSurfaceThickness` | `thickness` (float, **nearest**) |
+| `uSurfaceWax` | `wax` (byte, linear) |
+| `uSurfaceUnderglaze` | `underglaze` (byte, linear) |
+
+`onBeforeCompile` runs every hook already registered, then the per-mesh bind. `customProgramCacheKey` changes when hooks are added. `applyClayFinish` sets color, roughness, and clearcoat on every material that shares the hook list. A glaze shader should multiply on top of that, not fight it.
+
+Glaze textures for a mesh are stashed on `mesh.userData.surfaceTextures` and `mesh.userData.meshId`. The studio caches those `DataTexture`s by mesh id and **drops the cache when the open piece changes**, and again when the typed arrays are not the ones the texture was built from. A second piece does not keep the first piece's maps. Thickness uses nearest filtering because many phones lack `OES_texture_float_linear`; the byte maps stay linear.
 
 ## Tools
 
@@ -141,7 +158,43 @@ interface Tool {
 }
 ```
 
-`ToolContext` is `{ piece, wheel, pointer, previous, dt }`. The shell calls `onPointerDown` once per stroke and `onPointerMove` once per frame after that, then `onPointerUp`. Read `piece.grid` and call the clay functions. Call `ctx.wheel.addDrag(pressure)` so a firm hand slows the wheel. Haptics are fired by the shell from `tool.haptics` via `navigator.vibrate`; tools don't have to call it themselves.
+`ToolContext` is the profile sample plus what a tool needs to hit the 3D pot without editing core:
+
+| Field | What it is |
+| --- | --- |
+| `piece`, `wheel`, `pointer`, `previous`, `dt` | Same as before. `pointer` is the side-view plane sample |
+| `screen` | `{ x, y }` canvas CSS pixels, origin at the canvas top-left |
+| `ndc` | `{ x, y }` normalized device coordinates, each axis −1..1 |
+| `raycaster` | Camera ray through the pointer. Reused next frame; read it only inside the callback |
+| `surfaceHit` | `{ meshId, u, v, point, normal }` or `null`, from `raycastToUV` on `studio.bodyObjects()`. `point` and `normal` are piece-local meters (Y up, origin at the bat center), the same space as `Attachment` points. One frame's sim steps share this object; copy the vectors if you mutate them. The copies are safe to keep after the callback |
+| `markSurfaceDirty(meshId)` | Upload the GPU copy of that mesh's surface map (`'body'` or an attachment id) |
+| `events` | The studio bus below. Same object as `import { events } from './core/events'` |
+
+Core calls `onPointerDown` once per stroke and `onPointerMove` once per sim step after that, then `onPointerUp`. Read `piece.grid` and call the clay functions. Call `ctx.wheel.addDrag(pressure)` so a firm hand slows the wheel. Haptics are fired by the shell from `tool.haptics` via `navigator.vibrate`; tools don't have to call it themselves.
+
+Off the wheel, a missed side-view plane still delivers a context with `pressure: 0` so glaze and handles can use `surfaceHit`. On the wheel, a missed plane skips the tool, same as before.
+
+## Events
+
+`src/core/events.ts` exports `events`. Audio, gallery, and onboarding subscribe from their own files; `src/core/listeners.ts` loads those folders after the bus exists, so a top-level `import { events }` is safe. `on` returns an unsubscribe function. A throwing listener does not stop the others.
+
+```ts
+const stop = events.on('frame', ({ dt, piece }) => {});
+stop();
+```
+
+| Event | When | Payload |
+| --- | --- | --- |
+| `frame` | Once per animation frame, after the render | `{ dt, piece }` `dt` is seconds. `piece` is null on setup |
+| `stroke-start` | Before `onPointerDown` | `{ piece, toolId }` |
+| `stroke-end` | Pointer up or the stroke is cancelled | `{ piece, toolId }` |
+| `stage-change` | `transition` succeeds | `{ piece, from, to }` |
+| `wire-cut` | `removeFromWheel` cuts the piece off the bat | `{ piece }` |
+| `piece-change` | The open piece is replaced or discarded | `{ piece }` `piece` is null after discard. Not fired on startup |
+
+`ctx.events` is this bus. Drying and trimming do not emit `wire-cut`; only `removeFromWheel` does.
+
+Wheel audio (`installAudio`) still reads speed and finger pressure from the wheel. Its poll subscribes here — `frame` for the sample, `stroke-start` / `stroke-end` for the splash latch, `stage-change` so drying is not a cut, and `wire-cut` for the cut — and does not schedule its own animation frame.
 
 `ToolPointer`:
 
@@ -169,7 +222,7 @@ interface Stage {
 }
 ```
 
-The shell renders `hint` and `actions`. Wheel start/stop and the speed knob appear whenever `piece.onWheel`. To add a button, add an action on the stage. To add a hand, add a tool.
+The shell renders `hint` and `actions`. Wheel start/stop and the speed knob appear whenever `piece.onWheel`. To add a button, add an action on the stage. To add a hand, add a tool. The sheet rebuilds when the action list changes. `enabled` is updated on the existing button, so a speed-slider drag is not cancelled when Wire off flips at 28 rpm.
 
 Stub stages, left for later agents to fill in:
 
@@ -198,7 +251,7 @@ interface Attachment {
 }
 ```
 
-`createAttachment` fills defaults. `buildAttachmentGeometry` sweeps a tube along a Catmull-Rom spline with parallel-transport frames. Ends flare (radius × up to 1.55) and flatten slightly so the join can sit in the wall. UVs: **u around the tube, v along the spline**, including the join. The mesh is a child of the clay pivot, so it spins and lifts with the pot. Rebuild only when the point list changes — not per frame.
+`createAttachment` fills defaults. Ids are `att-` plus `crypto.randomUUID()`, with a timestamp fallback when `randomUUID` is missing, so a resumed piece never collides with a counter that restarted at `att-1`. `buildAttachmentGeometry` sweeps a tube along a Catmull-Rom spline with parallel-transport frames. Ends flare (radius × up to 1.55) and flatten slightly so the join can sit in the wall. UVs: **u around the tube, v along the spline**, including the join. The mesh is a child of the clay pivot, so it spins and lifts with the pot. Rebuild only when the point list changes — not per frame.
 
 `src/handbuild/handles.ts` exports `attachHandle(piece, attachment)`, which checks `canAttachHandle` and calls `ensureAttachmentSurface`. Replace that stub with the real handle/coil interaction; keep the `Attachment` fields.
 
@@ -223,8 +276,8 @@ Helpers:
 
 - `createSurfaceMap`, `ensureBodySurface`, `ensureAttachmentSurface`
 - `bodyUV(grid, ring, segment)`, `uvToTexel`, `sampleGlaze`
-- `createSurfaceTextures(map)` → `{ glazeId, thickness, wax, underglaze }` `DataTexture`s (`RedFormat`, byte or float). Call `markSurfaceTexturesDirty` after painting.
-- `raycastToUV(raycaster, meshes)` → `{ meshId, u, v }` using the mesh's uv attribute. `Studio.bodyObjects()` is the current list.
+- `createSurfaceTextures(map)` → `{ glazeId, thickness, wax, underglaze }` `DataTexture`s (`RedFormat`, byte or float). Byte maps are linear. **Thickness is nearest-filtered** so a phone without `OES_texture_float_linear` can still sample it. From a tool, call `ctx.markSurfaceDirty(meshId)` after painting. `markSurfaceTexturesDirty(textures)` still works if you hold the GPU copies.
+- `raycastToUV(raycaster, meshes)` → `{ meshId, u, v, point, normal }` using the mesh's uv attribute, or null. `point` and `normal` are piece-local. `Studio.bodyObjects()` is the current list. `ctx.surfaceHit` is that call for the pointer ray.
 
 `src/surface/glaze.ts` and `src/surface/wax.ts` are stubs. Paint the arrays, then `transition(piece, 'glazed')` when the coat is done.
 
@@ -251,4 +304,4 @@ npm test
 npm run build        # tsc + vite build, output in dist/
 ```
 
-CI (`.github/workflows/ci.yml`) typechecks and tests on every pull request. `.github/workflows/pages.yml` builds and deploys to GitHub Pages with `actions/upload-pages-artifact` and `actions/deploy-pages` on push to `main`. The repository Pages source is GitHub Actions.
+CI (`.github/workflows/ci.yml`) typechecks, tests, and runs `npm run build` on every pull request. `.github/workflows/pages.yml` builds and deploys to GitHub Pages with `actions/upload-pages-artifact` and `actions/deploy-pages` on push to `main`. The repository Pages source is GitHub Actions.

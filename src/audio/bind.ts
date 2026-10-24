@@ -1,3 +1,4 @@
+import { events } from '../core/events';
 import type { PieceState } from '../core/types';
 import { audio as sharedAudio } from './engine';
 import type { Audio } from './types';
@@ -5,15 +6,12 @@ import type { Audio } from './types';
 /**
  * The only place audio listens to the wheel.
  *
- * Core is adding a typed bus:
- *   events.on('frame' | 'stroke-start' | 'stroke-end' | 'stage-change' | 'wire-cut' | 'piece-change', ...)
- * When that lands, subscribe in `sample` and delete the `installAudio()` call in main.ts.
- * `onFrame` and `onWireCut` stay the handlers.
- *
- * Until then, main.ts calls `installAudio` once. A frame poll reads wheel speed,
- * finger pressure, and clay moisture, and treats "left the wheel while still wet"
- * as the wire cut (`removeFromWheel` does not change stage; drying does).
- * A water-tool stroke plays one splash.
+ * `installAudio` still receives the wheel and the pointer: those are not on
+ * the bus. The poll itself subscribes to `events` (`frame`, `stroke-start`,
+ * `stroke-end`, `stage-change`, `wire-cut`) so it does not run a second
+ * animation frame. `tick` stays synchronous for tests that drive a private bus.
+ * A water-tool stroke plays one splash. Leaving the wheel while still wet is
+ * the wire cut; drying and a stage change are not.
  */
 export interface WheelAudioSource {
   wheel: { omega: number; maxOmega: number };
@@ -25,6 +23,8 @@ export interface WheelAudioSource {
 }
 
 export interface AudioBinding {
+  /** Subscribe to the studio bus. `installAudio` does this for the shared engine. */
+  start(): void;
   tick(): void;
   stop(): void;
 }
@@ -53,7 +53,7 @@ export function installAudio(source: WheelAudioSource, bus: Audio = sharedAudio)
 }
 
 class PollBinding implements AudioBinding {
-  private raf: number | null = null;
+  private unsubs: Array<() => void> = [];
   private stopped = false;
   /** `null` until the first sample, so a piece that loads already off the wheel is silent. */
   private mounted: boolean | null = null;
@@ -65,19 +65,36 @@ class PollBinding implements AudioBinding {
   ) {}
 
   start(): void {
-    if (this.raf != null || typeof requestAnimationFrame !== 'function') return;
-    const loop = () => {
-      if (this.stopped) return;
-      this.tick();
-      this.raf = requestAnimationFrame(loop);
-    };
-    this.raf = requestAnimationFrame(loop);
+    if (this.unsubs.length > 0 || this.stopped) return;
+    this.unsubs = [
+      events.on('frame', () => {
+        if (!this.stopped) this.tick();
+      }),
+      events.on('stroke-start', () => {
+        this.splashed = false;
+      }),
+      events.on('stroke-end', () => {
+        this.splashed = false;
+      }),
+      events.on('stage-change', ({ piece }) => {
+        // Drying emits this and does not cut. Remember the mount so the next
+        // `frame` poll does not treat the transition as a wire.
+        this.mounted = piece.onWheel;
+      }),
+      events.on('wire-cut', () => {
+        if (this.stopped) return;
+        onWireCut(this.bus);
+        // `tick` also edge-detects "left the wheel while wet" for tests that
+        // call it directly. This sample already played.
+        this.mounted = false;
+      }),
+    ];
   }
 
   stop(): void {
     this.stopped = true;
-    if (this.raf != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(this.raf);
-    this.raf = null;
+    for (const unsub of this.unsubs) unsub();
+    this.unsubs = [];
   }
 
   tick(): void {

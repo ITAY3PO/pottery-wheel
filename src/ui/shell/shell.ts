@@ -81,6 +81,8 @@ export class Shell {
 
   render(model: ShellModel): void {
     this.subtitle.textContent = model.subtitle;
+    // `enabled` is patched in place. Rebuilding the sheet when Wire off flips
+    // at 28 rpm destroys an in-progress slider drag or tap.
     const signature = JSON.stringify({
       phase: model.phase,
       clayId: model.clayId,
@@ -90,7 +92,7 @@ export class Shell {
       active: model.activeToolId,
       showWheel: model.showWheel,
       running: model.running,
-      actions: model.actions,
+      actions: model.actions.map((action) => [action.id, action.label]),
       confirm: model.confirmDiscard,
       title: model.title,
     });
@@ -115,6 +117,10 @@ export class Shell {
     const stop = this.sheet.querySelector<HTMLButtonElement>('[data-stop]');
     if (start) start.setAttribute('aria-pressed', model.running ? 'true' : 'false');
     if (stop) stop.classList.toggle('down', !model.running && model.rpm < 1);
+    for (const action of model.actions) {
+      const button = this.sheet.querySelector<HTMLButtonElement>(`[data-action="${CSS.escape(action.id)}"]`);
+      if (button) button.disabled = !action.enabled;
+    }
   }
 
   private renderSetup(model: ShellModel): void {
