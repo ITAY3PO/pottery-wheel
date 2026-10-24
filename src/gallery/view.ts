@@ -79,9 +79,12 @@ export class Turntable {
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.12;
     this.renderer.setClearColor(new Color('#3a2e28'), 1);
-    this.renderer.debug.checkShaderErrors = false;
+    this.renderer.debug.checkShaderErrors =
+      import.meta.env.DEV || import.meta.env.MODE === 'test' || new URLSearchParams(location.search).has('debug');
     this.scene.background = new Color('#3a2e28');
-    void installBakedRoom(this.renderer, this.scene);
+    void installBakedRoom(this.renderer, this.scene).catch(() => {
+      // The key light still describes the room when the map cannot be fetched.
+    });
 
     const hemi = new HemisphereLight(0xfff6ec, 0x3a2a22, 0.55);
     const key = new DirectionalLight(0xfff0dc, 3.3);

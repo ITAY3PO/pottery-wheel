@@ -93,11 +93,11 @@ const shell = new Shell(app, {
     weightKg = clampWeight(kg);
   },
   onBegin: () => {
-    void mountGraphics().then(() => begin(createPiece(clayId, weightKg)));
+    queueBegin(() => createPiece(clayId, weightKg));
   },
   onResume: () => {
     const saved = loadPiece();
-    if (saved) void mountGraphics().then(() => begin(saved));
+    if (saved) queueBegin(() => saved);
   },
   onStart: () => {
     wheel.running = true;
@@ -245,7 +245,7 @@ function begin(next: PieceState): void {
   wheel.angle = 1.15;
   confirmDiscard = false;
   activeToolId = next.stage === 'wet' && next.onWheel ? 'center' : null;
-  studio.syncPiece(next);
+  bindFiredLook(next);
   publish();
   savePiece(next);
   events.emit('piece-change', { piece: next });
@@ -669,6 +669,7 @@ function publish(): void {
   app?.setAttribute('data-stage', piece ? piece.stage : 'setup');
   app?.setAttribute('data-on-wheel', piece?.onWheel ? 'true' : 'false');
   shell.render(view);
+  markBeginBusy();
   onboarding.sync(piece);
   resize();
   // The first paint is one frame. Later changes ease the camera and the lift.
@@ -692,14 +693,8 @@ function afterChange(): void {
   const available = toolsFor(piece.stage, piece.onWheel, tools);
   if (!available.some((tool) => tool.id === activeToolId)) activeToolId = available[0]?.id ?? null;
   confirmDiscard = false;
-  if (graphicsReady) studio.syncPiece(piece);
   savePiece(piece);
-  ensureGlaze();
-  // Env-map programs are too expensive for the opening paint. Bind them once
-  // the piece is fired, when the reflections actually show the glaze.
-  if (graphicsReady && piece.stage !== 'wet' && piece.stage !== 'leather-hard' && piece.stage !== 'bone-dry') {
-    void studio.prepareEnvironment().then(() => scheduleFrame());
-  }
+  bindFiredLook(piece);
   publish();
 }
 
@@ -765,7 +760,46 @@ function ensureGlaze(): void {
   if (glazeBound || !piece) return;
   if (piece.stage !== 'bisque' && piece.stage !== 'glazed' && piece.stage !== 'glaze-fired') return;
   glazeBound = true;
-  void import('./firing/look').then(({ bindGlazeFrame }) => bindGlazeFrame());
+  void import('./firing/look').then(({ bindGlazeFrame }) => {
+    bindGlazeFrame();
+    scheduleFrame();
+  });
+}
+
+/** Glaze hooks and the room map. Resume and a stage change both come through here. */
+function bindFiredLook(next: PieceState): void {
+  if (graphicsReady) studio.syncPiece(next);
+  ensureGlaze();
+  // Env-map programs are too expensive for the opening paint. Bind them once
+  // the piece is fired, when the reflections actually show the glaze.
+  if (
+    graphicsReady &&
+    (next.stage === 'bisque' || next.stage === 'glazed' || next.stage === 'glaze-fired')
+  ) {
+    void studio.prepareEnvironment().then(scheduleFrame);
+  }
+}
+
+/** Taps during compile share one mount. The latest tap is the piece that begins. */
+let beginToken = 0;
+function queueBegin(create: () => PieceState): void {
+  const token = ++beginToken;
+  markBeginBusy();
+  void mountGraphics()
+    .then(() => {
+      if (token !== beginToken || !graphicsReady) return;
+      begin(create());
+    })
+    .catch(() => {
+      // startGraphics already cleared the cached rejection and showed the toast.
+    });
+}
+
+function markBeginBusy(): void {
+  const busy = graphicsReady ? 'false' : 'true';
+  for (const selector of ['[data-begin]', '[data-resume]']) {
+    app?.querySelector(selector)?.setAttribute('aria-busy', busy);
+  }
 }
 
 /** Shell and onboarding are already on screen. Three.js starts on the next turns. */
@@ -776,70 +810,91 @@ function mountGraphics(): Promise<void> {
 }
 
 async function startGraphics(): Promise<void> {
-  await yieldToMain();
-  const pending = import('./render/studio');
-  await yieldToMain();
-  const { Studio } = await pending;
-  await yieldToMain();
-  studio = new Studio(canvas);
-  resize();
-  studio.applyQuality(currentProfile());
-  shell.setQuality(currentProfile());
-  // Warm while the canvas is out of the document. A yielded draw on an attached
-  // canvas becomes a compositor readback, and under software GL that readback
-  // is the long task. The shell does not move; the canvas is absolutely placed.
-  canvas.remove();
-  await yieldToMain();
-  await studio.warmShaders();
-  app?.prepend(canvas);
-  graphicsReady = true;
-  bindSurfaceDirty((meshId) => studio.markSurfaceDirty(meshId));
-  scheduleFrame();
-  const { Vector3 } = await import('three');
-  const projected = new Vector3();
-  Object.assign(window, {
-    __pottery: {
-      centeredness: () => (piece ? centeredness(piece.grid) : 0),
-      height: () => (piece ? pieceHeight(piece.grid) : 0),
-      innerAt: (t: number) => {
-        if (!piece) return 0;
-        const ring = Math.min(piece.grid.rings - 1, Math.max(0, Math.round(t * (piece.grid.rings - 1))));
-        let sum = 0;
-        for (let s = 0; s < piece.grid.segments; s++) sum += piece.grid.inner[ring * piece.grid.segments + s];
-        return sum / piece.grid.segments;
-      },
-      rpm: () => wheel.rpm,
-      stage: () => piece?.stage ?? 'setup',
-      onWheel: () => Boolean(piece?.onWheel),
-      attachmentCount: () => piece?.attachments.length ?? 0,
-      join: () => readJoin(piece?.attachments[piece.attachments.length - 1]),
-      quality: () => currentProfile(),
-      showUpdate: () => openUpdatePrompt(),
-      edge: (height: number, side: number) =>
-        piece ? silhouette(piece.grid, height, studio.clayPivot.rotation.y, side >= 0 ? 1 : -1) : 0,
-      project(x: number, y: number) {
-        projected.set(x, y, 0);
-        projected.project(studio.rig.camera);
-        const rect = canvas.getBoundingClientRect();
-        return {
-          x: (projected.x * 0.5 + 0.5) * rect.width + rect.left,
-          y: (-projected.y * 0.5 + 0.5) * rect.height + rect.top,
-        };
-      },
-    },
-  });
-  await yieldToMain();
-  const { installAudio } = await import('./audio');
-  installAudio({
-    wheel,
-    getPiece: () => piece,
-    getPointer: () => (toolDown && previous ? previous : null),
-    getTool: () => activeToolId,
-  });
-  const mute = document.getElementById('pw-mute');
-  if (mute) shell.topbar.append(mute);
+  try {
+    await yieldToMain();
+    const pending = import('./render/studio');
+    await yieldToMain();
+    const { Studio } = await pending;
+    await yieldToMain();
+    studio = new Studio(canvas);
+    resize();
+    studio.applyQuality(currentProfile());
+    shell.setQuality(currentProfile());
+    // Warm while the canvas is out of the document. A yielded draw on an attached
+    // canvas becomes a compositor readback, and under software GL that readback
+    // is the long task. The shell does not move; the canvas is absolutely placed.
+    canvas.remove();
+    await yieldToMain();
+    await studio.warmShaders();
+    app?.prepend(canvas);
+    graphicsReady = true;
+    bindSurfaceDirty((meshId) => studio.markSurfaceDirty(meshId));
+    scheduleFrame();
+    const expose =
+      import.meta.env.DEV || import.meta.env.MODE === 'test' || new URLSearchParams(location.search).has('debug');
+    if (expose) {
+      const { Vector3 } = await import('three');
+      const projected = new Vector3();
+      Object.assign(window, {
+        __pottery: {
+          centeredness: () => (piece ? centeredness(piece.grid) : 0),
+          height: () => (piece ? pieceHeight(piece.grid) : 0),
+          innerAt: (t: number) => {
+            if (!piece) return 0;
+            const ring = Math.min(piece.grid.rings - 1, Math.max(0, Math.round(t * (piece.grid.rings - 1))));
+            let sum = 0;
+            for (let s = 0; s < piece.grid.segments; s++) sum += piece.grid.inner[ring * piece.grid.segments + s];
+            return sum / piece.grid.segments;
+          },
+          rpm: () => wheel.rpm,
+          stage: () => piece?.stage ?? 'setup',
+          onWheel: () => Boolean(piece?.onWheel),
+          attachmentCount: () => piece?.attachments.length ?? 0,
+          join: () => readJoin(piece?.attachments[piece.attachments.length - 1]),
+          quality: () => currentProfile(),
+          showUpdate: () => openUpdatePrompt(),
+          glazeBound: () => studio.glazeUniformBound(),
+          environment: () => studio.hasEnvironment(),
+          edge: (height: number, side: number) =>
+            piece ? silhouette(piece.grid, height, studio.clayPivot.rotation.y, side >= 0 ? 1 : -1) : 0,
+          project(x: number, y: number) {
+            projected.set(x, y, 0);
+            projected.project(studio.rig.camera);
+            const rect = canvas.getBoundingClientRect();
+            return {
+              x: (projected.x * 0.5 + 0.5) * rect.width + rect.left,
+              y: (-projected.y * 0.5 + 0.5) * rect.height + rect.top,
+            };
+          },
+        },
+      });
+    }
+    await yieldToMain();
+    try {
+      const { installAudio } = await import('./audio');
+      installAudio({
+        wheel,
+        getPiece: () => piece,
+        getPointer: () => (toolDown && previous ? previous : null),
+        getTool: () => activeToolId,
+      });
+      const mute = document.getElementById('pw-mute');
+      if (mute) shell.topbar.append(mute);
+    } catch {
+      // The wheel still throws when the audio graph cannot start.
+    }
+  } catch (error) {
+    mounting = null;
+    toast('The wheel didn’t start. Tap to try again.');
+    throw error;
+  } finally {
+    if (!canvas.isConnected) app?.prepend(canvas);
+    markBeginBusy();
+  }
 }
 
 // After `mounting` is initialized. A call above that `let` hits the temporal dead zone.
-void mountGraphics();
+void mountGraphics().catch(() => {
+  // startGraphics cleared the cached rejection and showed the retry toast.
+});
 

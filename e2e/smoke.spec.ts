@@ -56,6 +56,18 @@ function pottery(page: Page) {
         return app.join();
       });
     },
+    async glazeBound(): Promise<boolean> {
+      return page.evaluate(() => {
+        const app = (window as unknown as { __pottery: { glazeBound: () => boolean } }).__pottery;
+        return app.glazeBound();
+      });
+    },
+    async environment(): Promise<boolean> {
+      return page.evaluate(() => {
+        const app = (window as unknown as { __pottery: { environment: () => boolean } }).__pottery;
+        return app.environment();
+      });
+    },
   };
 }
 
@@ -99,6 +111,15 @@ async function clickTool(page: Page, id: string): Promise<void> {
   await button.click();
 }
 
+function withDebug(url: string): string {
+  const hashAt = url.indexOf('#');
+  const hash = hashAt >= 0 ? url.slice(hashAt) : '';
+  const before = hashAt >= 0 ? url.slice(0, hashAt) : url;
+  if (/(?:[?&])debug(?:[=&]|$)/.test(before)) return url;
+  const joiner = before.includes('?') ? '&' : '?';
+  return `${before}${joiner}debug${hash}`;
+}
+
 async function clickAction(page: Page, id: string): Promise<void> {
   const button = page.locator(`[data-action="${id}"]`);
   await expect(button).toBeEnabled();
@@ -113,7 +134,7 @@ async function openKilnDoor(page: Page): Promise<void> {
 }
 
 test('manifest, service worker, and share tags', async ({ page }) => {
-  await page.goto('/pottery-wheel/');
+  await page.goto('/pottery-wheel/?debug');
   await expect(page.locator('meta[property="og:title"]')).toHaveAttribute('content', 'The Wheel');
   await expect(page.locator('meta[property="og:image"]')).toHaveAttribute('content', /og-preview\.png/);
 
@@ -150,7 +171,7 @@ test('manifest, service worker, and share tags', async ({ page }) => {
 });
 
 test('throws, trims, handles, fires, and opens a share link', async ({ page }) => {
-  await page.goto('/pottery-wheel/');
+  await page.goto('/pottery-wheel/?debug');
   const wheel = pottery(page);
   await wheel.ready();
 
@@ -233,20 +254,58 @@ test('throws, trims, handles, fires, and opens a share link', async ({ page }) =
   const link = await page.getByLabel('Share link').inputValue();
   expect(link).toContain('#p1.');
 
-  await page.goto(link);
+  await page.goto(withDebug(link));
   await expect(page.getByText('A shared pot')).toBeVisible();
 });
 
 test('a share link opens the pot without a tap', async ({ page }) => {
   const encoded = await encodeShare(createPiece('stoneware', 1));
   expect(encoded?.hash.startsWith('p1.')).toBe(true);
-  await page.goto(`/pottery-wheel/#${encoded?.hash ?? ''}`);
+  await page.goto(withDebug(`/pottery-wheel/#${encoded?.hash ?? ''}`));
   await expect(page.getByText('A shared pot')).toBeVisible({ timeout: 2000 });
 });
 
 test('onboarding is on screen without a tap', async ({ page }) => {
-  await page.goto('/pottery-wheel/');
-  await expect(page.getByRole('button', { name: 'Help' })).toBeVisible({ timeout: 8000 });
+  await page.goto('/pottery-wheel/?debug');
+  await expect(page.getByRole('button', { name: 'Help' })).toBeVisible({ timeout: 2000 });
   await expect(page.getByRole('navigation', { name: 'Where this piece is' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Sit down and throw' })).toBeVisible();
+});
+
+test('resuming a glaze-fired piece keeps the glaze and the room', async ({ page }) => {
+  await page.goto('/pottery-wheel/?debug');
+  const wheel = pottery(page);
+  await wheel.ready();
+
+  await page.getByRole('button', { name: 'Sit down and throw' }).click();
+  const skip = page.locator('[data-skip]');
+  try {
+    await skip.waitFor({ state: 'visible', timeout: 4000 });
+    await skip.click();
+  } catch {
+    // The tutorial is already dismissed in this profile.
+  }
+
+  await clickAction(page, 'wire-off');
+  await clickAction(page, 'dry-leather');
+  await expect.poll(() => wheel.stage()).toBe('leather-hard');
+  await clickAction(page, 'dry-bone');
+  await expect.poll(() => wheel.stage()).toBe('bone-dry');
+  await clickAction(page, 'fire-bisque');
+  await openKilnDoor(page);
+  await expect.poll(() => wheel.stage()).toBe('bisque');
+  await clickAction(page, 'dip');
+  await clickAction(page, 'finish-glaze');
+  await expect.poll(() => wheel.stage()).toBe('glazed');
+  await clickAction(page, 'fire-glaze');
+  await openKilnDoor(page);
+  await expect.poll(() => wheel.stage()).toBe('glaze-fired');
+
+  await page.reload();
+  await wheel.ready();
+  await expect(page.getByRole('button', { name: /Resume/ })).toBeVisible();
+  await page.getByRole('button', { name: /Resume/ }).click();
+  await expect.poll(() => wheel.stage()).toBe('glaze-fired');
+  await expect.poll(() => wheel.glazeBound(), { timeout: 20_000 }).toBe(true);
+  await expect.poll(() => wheel.environment(), { timeout: 20_000 }).toBe(true);
 });

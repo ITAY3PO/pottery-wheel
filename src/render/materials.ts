@@ -199,6 +199,13 @@ function declareSurfaceUniforms(shader: ClayShader): void {
   shader.uniforms[CLAY_SURFACE_UNIFORMS.underglaze] ??= { value: blank.byte };
 }
 
+/** True once `onBeforeCompile` has stored a program that declares `name`. */
+export function clayMaterialUniformBound(material: MeshPhysicalMaterial | null, name: string): boolean {
+  if (!material) return false;
+  const shader = compiledShaders.get(material);
+  return Boolean(shader?.uniforms[name] && shader.fragmentShader.includes(name));
+}
+
 function applySurfaceUniforms(shader: ClayShader, mesh: Mesh): void {
   const textures = mesh.userData.surfaceTextures as SurfaceTextures | undefined;
   const blank = fallbackTextures();

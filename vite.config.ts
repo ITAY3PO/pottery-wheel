@@ -22,27 +22,10 @@ function preloadBoot(): Plugin {
           return facade.endsWith('/src/boot.ts') || /\/boot-[^/]+\.js$/.test(item.fileName);
         });
         if (!boot) return html;
-        const seen = new Set<string>();
-        const links: string[] = [];
-        const walkStatic = (fileName: string) => {
-          if (seen.has(fileName)) return;
-          const item = bundle[fileName];
-          if (!item || item.type !== 'chunk') return;
-          seen.add(fileName);
-          links.push(`<link rel="modulepreload" crossorigin href="${base}${item.fileName}">`);
-          for (const child of item.imports) walkStatic(child);
-        };
-        walkStatic(boot.fileName);
-        // Studio and Three.js download with the page. Audio and glaze stay
-        // off this list so they do not compete with the shell on a slow phone.
-        for (const child of boot.dynamicImports) {
-          const item = bundle[child];
-          if (item?.type === 'chunk' && item.facadeModuleId?.replaceAll('\\', '/').endsWith('/src/render/studio.ts')) {
-            walkStatic(child);
-          }
-        }
-        const block = links.filter((link) => !html.includes(link)).join('');
-        return block ? html.replace('</head>', `${block}</head>`) : html;
+        // Only the boot chunk. Studio and Three.js stay on the dynamic import
+        // so they do not compete with the shell on a slow phone.
+        const link = `<link rel="modulepreload" crossorigin href="${base}${boot.fileName}">`;
+        return html.includes(link) ? html : html.replace('</head>', `${link}</head>`);
       },
     },
   };

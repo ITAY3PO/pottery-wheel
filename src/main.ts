@@ -14,7 +14,20 @@ const start = () => {
   void import('./boot');
 };
 
-// One turn so the document wordmark paints, then the shell. WebGL starts on a
-// later turn inside boot, still during the load. A long idle wait would leave
-// the page blank and push that work past the interaction window.
-window.setTimeout(start, 0);
+const sharedLink = typeof location !== 'undefined' && location.hash.startsWith('#p1.');
+
+function armIdleBoot(): void {
+  const run = () => {
+    const idle = window.requestIdleCallback;
+    // The timeout caps the wait so the boot still runs during the load trace.
+    if (typeof idle === 'function') idle(() => start(), { timeout: 1500 });
+    else window.setTimeout(start, 1500);
+  };
+  if (document.readyState === 'complete') run();
+  else window.addEventListener('load', run, { once: true });
+}
+
+// A share link has to open the shelf immediately. Everything else waits for a
+// quiet moment so the wordmark is not stuck behind WebGL startup.
+if (import.meta.env.DEV || sharedLink) start();
+else armIdleBoot();

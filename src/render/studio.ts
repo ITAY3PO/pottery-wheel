@@ -37,6 +37,7 @@ import { yieldToMain } from '../core/yield';
 import {
   applyClayFinish,
   bindSurfaceUniforms,
+  clayMaterialUniformBound,
   clayMaterialsSharingHooks,
   cloneClayMaterial,
   createClayMaterial,
@@ -116,9 +117,10 @@ export class Studio {
     this.renderer.setPixelRatio(profile.pixelRatio);
     this.renderer.shadowMap.type = PCFShadowMap;
     this.renderer.shadowMap.enabled = profile.shadows;
-    // getProgramInfoLog waits out the compiler. Leave it off so compileAsync
-    // can poll KHR_parallel_shader_compile instead of stalling the first frame.
-    this.renderer.debug.checkShaderErrors = false;
+    // getProgramInfoLog waits out the compiler. Production leaves it off so
+    // compileAsync can poll KHR_parallel_shader_compile instead of stalling.
+    this.renderer.debug.checkShaderErrors =
+      import.meta.env.DEV || import.meta.env.MODE === 'test' || new URLSearchParams(location.search).has('debug');
 
     const key = new DirectionalLight(0xfff0dc, 3.4);
     key.position.set(-0.85, 1.25, 0.62);
@@ -482,32 +484,45 @@ export class Studio {
       child.visible = false;
     }
     const compiled = new Set<string>();
-    for (const mesh of meshes) {
-      const material = mesh.material;
-      const key = Array.isArray(material) ? '' : material.uuid;
-      if (compiled.has(key)) continue;
-      compiled.add(key);
-      const opened: Object3D[] = [];
-      let parent: Object3D | null = mesh.parent;
-      while (parent && parent !== this.scene) {
-        if (!parent.visible) opened.push(parent);
-        parent.visible = true;
-        parent = parent.parent;
+    try {
+      for (const mesh of meshes) {
+        const material = mesh.material;
+        const key = Array.isArray(material) ? '' : material.uuid;
+        if (compiled.has(key)) continue;
+        compiled.add(key);
+        const opened: Object3D[] = [];
+        let parent: Object3D | null = mesh.parent;
+        while (parent && parent !== this.scene) {
+          if (!parent.visible) opened.push(parent);
+          parent.visible = true;
+          parent = parent.parent;
+        }
+        mesh.visible = true;
+        this.renderer.render(this.scene, camera);
+        // Finish this program before yielding so its compile does not pile into the present.
+        this.renderer.getContext().finish();
+        mesh.visible = false;
+        for (const ancestor of opened) ancestor.visible = false;
+        await yieldToMain();
       }
-      mesh.visible = true;
-      this.renderer.render(this.scene, camera);
-      // Finish this program before yielding so its compile does not pile into the present.
-      this.renderer.getContext().finish();
-      mesh.visible = false;
-      for (const ancestor of opened) ancestor.visible = false;
-      await yieldToMain();
+    } finally {
+      meshes.forEach((mesh, index) => {
+        mesh.visible = meshWasVisible[index] ?? true;
+      });
+      children.forEach((child, index) => {
+        child.visible = childWasVisible[index] ?? true;
+      });
     }
-    meshes.forEach((mesh, index) => {
-      mesh.visible = meshWasVisible[index] ?? true;
-    });
-    children.forEach((child, index) => {
-      child.visible = childWasVisible[index] ?? true;
-    });
+  }
+
+  /** The glaze-fire hook has written `uPwFire` into the body program. */
+  glazeUniformBound(): boolean {
+    return clayMaterialUniformBound(this.bodyMaterial, 'uPwFire');
+  }
+
+  /** The baked room map is on the scene, so metal and glaze can reflect it. */
+  hasEnvironment(): boolean {
+    return this.scene.environment != null;
   }
 
   /** Upload the room map before the first draw so materials compile one variant. */
