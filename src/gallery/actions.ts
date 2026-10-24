@@ -1,6 +1,6 @@
 import type { PieceState } from '../core/types';
 
-/** Stage actions call these. `startGallery` binds them when the overlay mounts. */
+/** Stage actions call these. The gallery boot binds them when the overlay mounts. */
 export interface GalleryActions {
   save(piece: PieceState): void;
   share(piece: PieceState): void;

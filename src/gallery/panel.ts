@@ -33,13 +33,10 @@ export interface GalleryPanel {
 }
 
 export function mountGallery(options: { root: HTMLElement; currentPiece: () => PieceState | null }): GalleryPanel {
-  const bar = document.createElement('div');
-  bar.className = 'gal-top';
-  const fab = document.createElement('button');
-  fab.type = 'button';
-  fab.className = 'gal-fab';
-  fab.textContent = 'Gallery';
-  bar.append(fab);
+  const entry = document.createElement('button');
+  entry.type = 'button';
+  entry.className = 'gal-entry';
+  entry.textContent = 'Gallery';
 
   const layer = document.createElement('div');
   layer.className = 'gal-layer';
@@ -57,8 +54,7 @@ export function mountGallery(options: { root: HTMLElement; currentPiece: () => P
   const body = document.createElement('div');
   sheet.append(body);
   layer.append(canvas, caption, sheet);
-  options.root.append(bar, layer);
-  adoptMuteButton(bar);
+  options.root.append(entry, layer);
 
   let mode: Mode = { kind: 'browse' };
   let selectedId: string | null = null;
@@ -74,7 +70,7 @@ export function mountGallery(options: { root: HTMLElement; currentPiece: () => P
   const observer = new ResizeObserver(() => turntable?.resize());
   observer.observe(layer);
 
-  fab.addEventListener('click', () => openBrowse());
+  entry.addEventListener('click', () => openBrowse());
   window.addEventListener(
     'keydown',
     (event) => {
@@ -144,7 +140,7 @@ export function mountGallery(options: { root: HTMLElement; currentPiece: () => P
   function reveal(): void {
     const opening = layer.hidden;
     layer.hidden = false;
-    fab.hidden = true;
+    entry.hidden = true;
     setBackgroundHidden(true);
     if (!turntable) turntable = createTurntable(canvas);
     render();
@@ -165,7 +161,7 @@ export function mountGallery(options: { root: HTMLElement; currentPiece: () => P
       fromHash = false;
     }
     layer.hidden = true;
-    fab.hidden = false;
+    entry.hidden = false;
     setBackgroundHidden(false);
     turntable?.dispose();
     turntable = null;
@@ -378,7 +374,7 @@ export function mountGallery(options: { root: HTMLElement; currentPiece: () => P
 
   function setBackgroundHidden(hidden: boolean): void {
     for (const child of options.root.children) {
-      if (child === layer || child === bar) continue;
+      if (child === layer || child === entry) continue;
       if (hidden) child.setAttribute('aria-hidden', 'true');
       else child.removeAttribute('aria-hidden');
     }
@@ -386,23 +382,10 @@ export function mountGallery(options: { root: HTMLElement; currentPiece: () => P
 
   function refreshFab(): void {
     const count = listGallery().length;
-    fab.setAttribute('aria-label', count === 1 ? 'Open gallery, 1 pot' : `Open gallery, ${count} pots`);
+    entry.setAttribute('aria-label', count === 1 ? 'Open gallery, 1 pot' : `Open gallery, ${count} pots`);
   }
 
   return { save, share, openShared };
-}
-
-/** Keep #pw-mute in the same top-right row as Gallery. Audio may mount it before or after. */
-function adoptMuteButton(bar: HTMLElement): void {
-  const place = () => {
-    const mute = document.querySelector<HTMLButtonElement>('#pw-mute');
-    if (mute && mute.parentElement !== bar) bar.append(mute);
-  };
-  place();
-  const root = bar.parentElement;
-  if (!root) return;
-  const observer = new MutationObserver(place);
-  observer.observe(root, { childList: true });
 }
 
 function textButton(label: string, className: string, onClick: () => void): HTMLButtonElement {

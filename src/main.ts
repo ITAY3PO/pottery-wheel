@@ -14,7 +14,6 @@ import { Studio } from './render/studio';
 import { stepTrimChips } from './tools/trim-chips';
 import { Onboarding } from './ui/onboarding/onboarding';
 import { Shell, type ShellModel } from './ui/shell/shell';
-import { startGallery } from './gallery/start';
 import { Wheel } from './core/wheel';
 import { installAudio } from './audio';
 
@@ -148,8 +147,6 @@ installAudio({
 });
 const mute = document.getElementById('pw-mute');
 if (mute) shell.topbar.append(mute);
-// Gallery overlay. `currentPiece` is the live pot, including pieces saved before glaze firing.
-startGallery({ root: app, currentPiece: () => piece });
 requestAnimationFrame(frame);
 
 canvas.addEventListener('contextmenu', (event) => event.preventDefault());
