@@ -10,10 +10,9 @@ const BRUSH_STEPS = [
 ] as const;
 
 /**
- * One compact row — wax, glaze swatches, and a three-step brush — placed
- * after Dip, Pour, and Coat is done. The shell rebuilds `.sheet` from HTML,
- * so the row is put back after `.actions`. Those actions stay first in the
- * sheet and sticky, so they remain on screen while the row can scroll.
+ * One compact row — wax, glaze swatches, and a three-step brush — under
+ * Dip, Pour, and Coat is done. The shell rebuilds `.sheet` from HTML, so
+ * both are wrapped again at the top of the sheet and kept on screen.
  */
 export function mountPainter(): void {
   if (mounted || typeof document === 'undefined') return;
@@ -121,11 +120,21 @@ export function mountPainter(): void {
     // The gallery overlay has its own sheet. The potter's sheet is the one
     // directly under #app. Dip, pour, and coat stay in front of this row.
     const sheet = root.querySelector(':scope > .sheet-chrome > .sheet');
-    const actions = sheet?.querySelector(':scope > .actions');
-    if (!sheet || !actions) return;
-    if (dock.parentElement === sheet && dock.previousElementSibling === actions) return;
-    actions.after(dock);
-    window.dispatchEvent(new Event('resize'));
+    const actions = sheet?.querySelector('.actions');
+    if (!sheet || !actions || actions.parentElement?.closest('.gal-layer')) return;
+    const bisque = root.getAttribute('data-stage') === 'bisque';
+    const bar = sheet.querySelector(':scope > .painter-bar');
+    if (!bisque) {
+      if (bar instanceof HTMLElement && actions.parentElement === bar) bar.replaceWith(actions);
+      return;
+    }
+    const host = bar instanceof HTMLElement ? bar : document.createElement('div');
+    host.className = 'painter-bar';
+    if (host.parentElement !== sheet || actions.parentElement !== host || dock.parentElement !== host || dock.previousElementSibling !== actions) {
+      if (host.parentElement !== sheet) sheet.prepend(host);
+      host.append(actions, dock);
+      window.dispatchEvent(new Event('resize'));
+    }
   };
   const observer = new MutationObserver(place);
   observer.observe(root, { childList: true, subtree: true });
@@ -157,17 +166,18 @@ const PAINTER_CSS = `
   display: flex;
   flex-direction: column;
 }
-#app[data-stage="bisque"] > .sheet-chrome > .sheet > .actions {
-  order: -1;
+#app[data-stage="bisque"] > .sheet-chrome > .sheet > .painter-bar {
   position: sticky;
   top: 0;
   z-index: 2;
   flex-shrink: 0;
-  margin: 0 0 8px;
-  padding-bottom: 8px;
   background: var(--paper);
+  padding-bottom: 4px;
 }
-.painter { display: none; margin: 0 0 8px; }
+#app[data-stage="bisque"] > .sheet-chrome > .sheet > .painter-bar > .actions {
+  margin-top: 0;
+}
+.painter { display: none; margin: 8px 0 0; }
 #app[data-stage="bisque"] .painter { display: block; }
 .painter-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .painter-wax {

@@ -7,6 +7,7 @@ import { shrinkageScale, skipDrying, transition } from '../src/core/stateMachine
 import { ensureBodySurface } from '../src/core/surfaceMap';
 import type { AttachmentKind, ClayTypeId, PieceState } from '../src/core/types';
 import { fireBisque, fireGlaze, lastFiringNote } from '../src/firing/outcome';
+import { coachTip } from '../src/ui/onboarding/tips';
 import { writeJoin } from '../src/handbuild/join';
 
 function boneDry(clay: ClayTypeId = 'stoneware'): PieceState {
@@ -93,6 +94,7 @@ describe('kiln outcomes', () => {
     expect(torn).toBeLessThan(piece.grid.torn.length * 0.2);
     expect(lastFiringNote).toMatch(/cracked/i);
     expect(lastFiringNote).toMatch(/start a new piece/i);
+    expect(coachTip(piece)?.text).toMatch(/start a new piece/i);
   });
 
   it('slumps earthenware at cone 6 and leaves stoneware and porcelain standing', () => {
