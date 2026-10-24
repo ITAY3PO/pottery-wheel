@@ -107,8 +107,10 @@ export function mountPainter(): void {
   window.addEventListener('pointercancel', lift, true);
 
   const place = () => {
-    const sheet = root.querySelector('.sheet');
-    const actions = sheet?.querySelector('.actions');
+    // The gallery overlay has its own sheet. The potter's sheet is the one
+    // directly under #app, and dip / pour live in its action row.
+    const sheet = root.querySelector(':scope > .sheet-chrome > .sheet');
+    const actions = sheet?.querySelector(':scope > .actions');
     if (!sheet || !actions) return;
     if (dock.parentElement === sheet && dock.nextElementSibling === actions) return;
     sheet.insertBefore(dock, actions);
