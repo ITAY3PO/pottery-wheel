@@ -3,6 +3,7 @@ import { getClay } from './clay/clays';
 import { centeredness, pieceHeight, profileExtent, segmentAtWorldAngle, silhouette } from './clay/grid';
 import { evaluateIntegrity } from './clay/integrity';
 import { events } from './core/events';
+import { SIM_STEP, stepFrameClock } from './core/frameClock';
 import { vibrate } from './core/haptics';
 import { clampWeight, createPiece } from './core/piece';
 import { loadStages, loadTools, stageById, toolsFor } from './core/registry';
@@ -51,8 +52,6 @@ let saveTimer = 0;
 let idleAngle = 0;
 let last = performance.now();
 let lastCoach = 0;
-const SIM_STEP = 1 / 60;
-const MAX_FRAME = 0.25;
 let toolDown = false;
 let needsDown = false;
 let strokeToolId: string | null = null;
@@ -146,6 +145,8 @@ const shell = new Shell(app, {
     const profile = setQualityMode(mode);
     studio.applyQuality(profile);
     shell.setQuality(profile);
+    // setSize clears the drawing buffer. Idle has no loop, so ask for a frame.
+    wake(200);
   },
 });
 
@@ -166,13 +167,21 @@ onboarding = new Onboarding({
 });
 
 let scheduled = false;
+let looping = false;
+let restarting = false;
 let warmed = false;
 let aliveUntil = 0;
 
 /** Draw again soon. A settled scene does not keep the main thread busy. */
 function scheduleFrame(): void {
   if (scheduled) return;
+  if (!looping) {
+    // The clock stopped with the last frame. Stamp it so a quick tap is not a hold.
+    last = performance.now();
+    restarting = true;
+  }
   scheduled = true;
+  looping = true;
   requestAnimationFrame((now) => {
     scheduled = false;
     frame(now);
@@ -252,11 +261,14 @@ function frame(now: number): void {
   // A slow frame still advances the wheel. Pressure tools scale with dt, so
   // they run on each fixed step; a pull's drag is the pointer delta and only
   // lands on the step where the finger actually moved. Quality sees the real
-  // gap, including the part the sim clamps.
-  const raw = Math.max(0, (now - last) / 1000);
-  const elapsed = Math.min(MAX_FRAME, raw);
-  last = now;
-  if (noteFrame(raw)) {
+  // gap, including the part the sim clamps. The frame that restarts the loop
+  // is one sim step and is not a quality sample.
+  const restart = restarting;
+  restarting = false;
+  const step = stepFrameClock(now, last, restart);
+  const elapsed = step.elapsed;
+  last = step.lastMs;
+  if (step.sample != null && noteFrame(step.sample)) {
     const profile = currentProfile();
     studio.applyQuality(profile);
     shell.setQuality(profile);
@@ -268,7 +280,7 @@ function frame(now: number): void {
     studio.showTrimChips(chips);
     studio.render(elapsed);
     events.emit('frame', { dt: elapsed, piece: null });
-    if (chips.length > 0 || performance.now() < aliveUntil) scheduleFrame();
+    continueFrame(chips.length > 0);
     return;
   }
 
@@ -321,10 +333,21 @@ function frame(now: number): void {
       onboarding.sync(piece);
     }
   }
+  continueFrame(chips.length > 0);
+}
+
+function continueFrame(chipsActive: boolean): void {
   const spinning = wheel.running || Math.abs(wheel.omega) > 0.04;
-  if (toolDown || orbiting || rightOrbit || spinning || chips.length > 0 || performance.now() < aliveUntil) {
-    scheduleFrame();
-  }
+  const keep =
+    chipsActive ||
+    toolDown ||
+    orbiting ||
+    rightOrbit ||
+    spinning ||
+    performance.now() < aliveUntil ||
+    studio.rig.easing;
+  if (keep) scheduleFrame();
+  else looping = false;
 }
 
 function applyStroke(dt: number, now: number, sample: StrokeSample | null, surfaceHit: SurfaceHit | null): void {
@@ -678,13 +701,15 @@ function toast(text: string): void {
   message = text;
   messageUntil = performance.now() + 3600;
   publish();
+  wake(3700);
 }
 
 function resize(): void {
   const width = app?.clientWidth ?? window.innerWidth;
   const height = app?.clientHeight ?? window.innerHeight;
   const rect = shell.chrome.getBoundingClientRect();
-  if (app instanceof HTMLElement) app.style.setProperty('--chrome-block', `${Math.round(rect.height)}px`);
+  // The update bar is on document.body, so the sheet height has to live on the root.
+  document.documentElement.style.setProperty('--chrome-block', `${Math.round(rect.height)}px`);
   // Portrait: the chrome covers the bottom, so the canvas is only the part
   // above it. A centered desktop chrome leaves the sides open and the camera
   // shifts the clay up. Phone landscape docks the chrome on the right; the

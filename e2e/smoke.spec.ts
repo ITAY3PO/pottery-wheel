@@ -1,4 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
+import { createPiece } from '../src/core/piece';
+import { encodeShare } from '../src/gallery/codec';
 
 interface Point {
   x: number;
@@ -13,9 +15,6 @@ interface JoinPrep {
 function pottery(page: Page) {
   return {
     async ready(): Promise<void> {
-      await page.evaluate(() => {
-        window.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-      });
       await page.waitForFunction(() => {
         const app = (window as unknown as { __pottery?: { project?: unknown } }).__pottery;
         return typeof app?.project === 'function';
@@ -236,4 +235,18 @@ test('throws, trims, handles, fires, and opens a share link', async ({ page }) =
 
   await page.goto(link);
   await expect(page.getByText('A shared pot')).toBeVisible();
+});
+
+test('a share link opens the pot without a tap', async ({ page }) => {
+  const encoded = await encodeShare(createPiece('stoneware', 1));
+  expect(encoded?.hash.startsWith('p1.')).toBe(true);
+  await page.goto(`/pottery-wheel/#${encoded?.hash ?? ''}`);
+  await expect(page.getByText('A shared pot')).toBeVisible({ timeout: 2000 });
+});
+
+test('onboarding is on screen without a tap', async ({ page }) => {
+  await page.goto('/pottery-wheel/');
+  await expect(page.getByRole('button', { name: 'Help' })).toBeVisible({ timeout: 8000 });
+  await expect(page.getByRole('navigation', { name: 'Where this piece is' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sit down and throw' })).toBeVisible();
 });

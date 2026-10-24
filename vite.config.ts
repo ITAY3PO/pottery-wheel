@@ -1,19 +1,37 @@
+import type { Plugin } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import { defineConfig } from 'vitest/config';
+
+/** Fetch and compile the boot chunk before the idle callback evaluates it. */
+function preloadBoot(): Plugin {
+  const base = '/pottery-wheel/';
+  return {
+    name: 'preload-boot',
+    transformIndexHtml: {
+      order: 'post',
+      handler(html, ctx) {
+        if (ctx.server) {
+          const link = `<link rel="modulepreload" crossorigin href="${base}src/boot.ts">`;
+          return html.includes(link) ? html : html.replace('</head>', `${link}</head>`);
+        }
+        const boot = Object.values(ctx.bundle ?? {}).find(
+          (item) => item.type === 'chunk' && item.facadeModuleId?.replaceAll('\\', '/').endsWith('/src/boot.ts'),
+        );
+        if (!boot || boot.type !== 'chunk') return html;
+        const link = `<link rel="modulepreload" crossorigin href="${base}${boot.fileName}">`;
+        return html.includes(link) ? html : html.replace('</head>', `${link}</head>`);
+      },
+    },
+  };
+}
 
 export default defineConfig({
   base: '/pottery-wheel/',
   plugins: [
+    preloadBoot(),
     VitePWA({
       registerType: 'prompt',
       injectRegister: false,
-      includeAssets: [
-        'og-preview.png',
-        'icons/icon-192.png',
-        'icons/icon-512.png',
-        'icons/icon-maskable-192.png',
-        'icons/icon-maskable-512.png',
-      ],
       manifest: {
         name: 'The Wheel',
         short_name: 'The Wheel',
@@ -33,7 +51,9 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: 'index.html',
-        globPatterns: ['**/*.{js,css,html,png,svg,webmanifest,woff2}'],
+        // Icons and the manifest are added once by the plugin. A broad png/webmanifest
+        // glob precaches them a second time. The share image is not a manifest icon.
+        globPatterns: ['**/*.{js,css,html,woff2}', 'og-preview.png'],
         cleanupOutdatedCaches: true,
         skipWaiting: false,
         clientsClaim: false,

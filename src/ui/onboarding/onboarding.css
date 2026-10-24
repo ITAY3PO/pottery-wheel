@@ -23,7 +23,7 @@
   color: var(--ink);
   font-family: var(--font);
   font-size: 15px;
-  font-weight: 640;
+  font-weight: 600;
   letter-spacing: 0.01em;
   box-shadow: 0 1px 4px rgba(28, 22, 19, 0.28);
   touch-action: manipulation;
@@ -88,7 +88,7 @@
   display: grid;
   place-items: center;
   font-size: 11px;
-  font-weight: 640;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -96,7 +96,7 @@
   display: block;
   max-width: 100%;
   font-size: 11px;
-  font-weight: 640;
+  font-weight: 600;
   line-height: 1.1;
   text-align: center;
   letter-spacing: -0.01em;
@@ -176,7 +176,7 @@
   margin: 0;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 640;
+  font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -187,7 +187,7 @@
   margin: 0;
   font-family: var(--display);
   font-size: 20px;
-  font-weight: 560;
+  font-weight: 600;
   letter-spacing: -0.02em;
 }
 
@@ -246,7 +246,7 @@
 }
 
 .tutorial-gesture {
-  font-weight: 640;
+  font-weight: 600;
 }
 
 .tutorial-body,

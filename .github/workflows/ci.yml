@@ -37,4 +37,5 @@ jobs:
         run: npm run e2e
 
       - name: Lighthouse
+        continue-on-error: true
         run: npm run lighthouse

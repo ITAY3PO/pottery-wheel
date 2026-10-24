@@ -73,6 +73,21 @@ export class CameraRig {
     return this.azimuth;
   }
 
+  /**
+   * True while a preset or a reframed look point still has a visible remainder.
+   * The ease is exponential, so a fixed timer stops about 1.3% short.
+   */
+  get easing(): boolean {
+    let dAz = this.targetAzimuth - this.azimuth;
+    dAz = Math.atan2(Math.sin(dAz), Math.cos(dAz));
+    if (Math.abs(dAz) > 0.0008) return true;
+    if (Math.abs(this.targetPolar - this.polar) > 0.0008) return true;
+    const dx = this.desired.x - this.target.x;
+    const dy = this.desired.y - this.target.y;
+    const dz = this.desired.z - this.target.z;
+    return dx * dx + dy * dy + dz * dz > 1e-8;
+  }
+
   /** Ease to a preset. The drag path is left alone until the angles arrive. */
   setPreset(preset: ViewPreset): void {
     const pose = VIEW_PRESETS.find((entry) => entry.id === preset);

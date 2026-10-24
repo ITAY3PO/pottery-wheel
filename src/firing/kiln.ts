@@ -192,7 +192,7 @@ const KILN_CSS = `
   text-align: center;
   font-family: Fraunces, Georgia, serif;
   font-size: 42px;
-  font-weight: 560;
+  font-weight: 600;
   letter-spacing: -0.03em;
   text-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
   pointer-events: none;
@@ -219,6 +219,6 @@ const KILN_CSS = `
   color: #fffaf6;
   font: inherit;
   font-size: 18px;
-  font-weight: 680;
+  font-weight: 700;
 }
 `;

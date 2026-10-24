@@ -219,7 +219,7 @@ const PAINTER_CSS = `
   border: 1.5px solid var(--line);
   background: #f4efe4;
   font: inherit;
-  font-weight: 640;
+  font-weight: 600;
 }
 .painter-wax[aria-pressed="true"] {
   background: var(--ink);
@@ -283,7 +283,7 @@ const PAINTER_CSS = `
   border: 1.5px solid var(--line);
   background: transparent;
   font: inherit;
-  font-weight: 640;
+  font-weight: 600;
 }
 .painter-size[aria-pressed="true"] {
   background: var(--ink);

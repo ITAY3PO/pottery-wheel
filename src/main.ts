@@ -7,26 +7,26 @@ import { registerAppUpdate } from './pwa/update';
 registerAppUpdate();
 
 let booting = false;
-let bootTimer = 0;
 
 const start = () => {
   if (booting) return;
   booting = true;
-  window.clearTimeout(bootTimer);
   void import('./boot');
 };
 
-if (import.meta.env.DEV) {
-  start();
-} else {
-  // A tap brings the wheel up immediately. With no tap, wait long enough that the
-  // first paint is not stuck behind WebGL startup on a slow phone.
-  const bootOnGesture = () => {
-    window.removeEventListener('pointerdown', bootOnGesture);
-    window.removeEventListener('keydown', bootOnGesture);
-    start();
+const sharedLink = typeof location !== 'undefined' && location.hash.startsWith('#p1.');
+
+function armIdleBoot(): void {
+  const run = () => {
+    const idle = window.requestIdleCallback;
+    if (typeof idle === 'function') idle(() => start(), { timeout: 1500 });
+    else window.setTimeout(start, 1500);
   };
-  window.addEventListener('pointerdown', bootOnGesture);
-  window.addEventListener('keydown', bootOnGesture);
-  bootTimer = window.setTimeout(start, 5000);
+  if (document.readyState === 'complete') run();
+  else window.addEventListener('load', run, { once: true });
 }
+
+// A share link has to open the shelf immediately. Everything else waits for a
+// quiet moment so the wordmark is not stuck behind WebGL startup.
+if (import.meta.env.DEV || sharedLink) start();
+else armIdleBoot();
