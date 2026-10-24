@@ -40,4 +40,9 @@ describe('registries', () => {
       'glaze-fired',
     ]);
   });
+
+  it('keeps two-finger orbit on during the wet throwing stage', () => {
+    const wet = loadStages().find((stage) => stage.id === 'wet');
+    expect(wet?.allowOrbit).toBe(true);
+  });
 });

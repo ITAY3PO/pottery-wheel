@@ -2,27 +2,84 @@ import { PerspectiveCamera, Raycaster, Vector2, Vector3 } from 'three';
 
 const raycaster = new Raycaster();
 const ndc = new Vector2();
-const hit = new Vector3();
+
+/** Horizontal angle of the historical side camera: almost level, a hair above the bat. */
+const SIDE_POLAR = Math.atan2(1, 0.02);
+const POLAR_MIN = 0.12;
+const POLAR_MAX = SIDE_POLAR;
+
+export type ViewPreset = 'top' | 'three-quarter' | 'side';
+
+export const VIEW_PRESETS: readonly { id: ViewPreset; label: string; polar: number; azimuth: number }[] = [
+  { id: 'top', label: 'Top', polar: 0.18, azimuth: 0 },
+  { id: 'three-quarter', label: '3/4', polar: Math.PI / 4, azimuth: 0.62 },
+  { id: 'side', label: 'Side', polar: SIDE_POLAR, azimuth: 0 },
+];
 
 /**
- * Side view while throwing: screen x is radius, screen y is height.
- * Off the wheel, two fingers (or right-drag) orbit.
+ * Signed radius (x) and height (y) where a ray crosses the vertical plane
+ * through the wheel axis that faces the camera. `x` is along screen-right,
+ * so a side camera on +Z still reports world X. A ray parallel to that plane
+ * returns null.
+ */
+export function profileOnViewPlane(
+  origin: { x: number; y: number; z: number },
+  direction: { x: number; y: number; z: number },
+  cameraX: number,
+  cameraZ: number,
+): { x: number; y: number } | null {
+  const horiz = Math.hypot(cameraX, cameraZ);
+  const nx = horiz < 1e-6 ? 0 : cameraX / horiz;
+  const nz = horiz < 1e-6 ? 1 : cameraZ / horiz;
+  const denom = direction.x * nx + direction.z * nz;
+  if (Math.abs(denom) < 1e-5) return null;
+  const t = -(origin.x * nx + origin.z * nz) / denom;
+  if (t < 0) return null;
+  const hx = origin.x + direction.x * t;
+  const hy = origin.y + direction.y * t;
+  const hz = origin.z + direction.z * t;
+  return { x: hx * nz - hz * nx, y: hy };
+}
+
+/**
+ * Orbits the clay. Presets ease into place; a drag follows the finger.
+ * One finger stays the tool — this rig only moves the camera.
  */
 export class CameraRig {
   readonly camera = new PerspectiveCamera(32, 1, 0.02, 30);
   /** Ray through the latest pointer. Stable until the next `aimPointer`. */
   readonly pointerRaycaster = new Raycaster();
-  mode: 'side' | 'orbit' = 'side';
-  private orbitAzimuth = 0.42;
-  private orbitPolar = 1.08;
-  private blend = 0;
+  private polar = SIDE_POLAR;
+  private azimuth = 0;
+  private targetPolar = SIDE_POLAR;
+  private targetAzimuth = 0;
+  private chosen: ViewPreset | null = 'side';
   private worldWidth = 0.32;
   private readonly target = new Vector3(0, 0.04, 0);
   private readonly desired = new Vector3(0, 0.04, 0);
   private sheetFraction = 0.28;
 
-  setMode(mode: 'side' | 'orbit'): void {
-    this.mode = mode;
+  constructor() {
+    this.update(0);
+  }
+
+  /** Preset the buttons are showing, or null once the user has orbited off it. */
+  get preset(): ViewPreset | null {
+    return this.chosen;
+  }
+
+  /** Camera's horizontal angle around the wheel axis. 0 sits on +Z, the old side view. */
+  get azimuthAngle(): number {
+    return this.azimuth;
+  }
+
+  /** Ease to a preset. The drag path is left alone until the angles arrive. */
+  setPreset(preset: ViewPreset): void {
+    const pose = VIEW_PRESETS.find((entry) => entry.id === preset);
+    if (!pose) return;
+    this.targetPolar = pose.polar;
+    this.targetAzimuth = pose.azimuth;
+    this.chosen = preset;
   }
 
   /** Frame a piece so the clay fills the view you can actually touch. */
@@ -47,39 +104,44 @@ export class CameraRig {
     this.camera.updateProjectionMatrix();
   }
 
+  /** Two-finger drag and right-drag. Moves immediately and leaves the preset. */
   orbitBy(dx: number, dy: number): void {
-    if (this.mode !== 'orbit') return;
-    this.orbitAzimuth -= dx * 0.0055;
-    this.orbitPolar = Math.max(0.38, Math.min(1.38, this.orbitPolar - dy * 0.0045));
+    if (dx === 0 && dy === 0) return;
+    this.azimuth -= dx * 0.0055;
+    this.polar = Math.max(POLAR_MIN, Math.min(POLAR_MAX, this.polar - dy * 0.0045));
+    this.targetAzimuth = this.azimuth;
+    this.targetPolar = this.polar;
+    this.chosen = null;
   }
 
   update(dt: number): void {
-    const goal = this.mode === 'orbit' ? 1 : 0;
-    this.blend += (goal - this.blend) * Math.min(1, dt * 3.5);
+    const ease = 1 - Math.exp(-dt * 6);
+    let dAz = this.targetAzimuth - this.azimuth;
+    dAz = Math.atan2(Math.sin(dAz), Math.cos(dAz));
+    this.azimuth += dAz * ease;
+    this.polar += (this.targetPolar - this.polar) * ease;
     this.target.lerp(this.desired, Math.min(1, dt * 3));
 
     const vFov = (this.camera.fov * Math.PI) / 180;
     const aspect = this.camera.aspect || 1;
     const worldHeight = this.worldWidth / Math.max(0.35, aspect);
-    const distance = worldHeight / (2 * Math.tan(vFov / 2));
+    const distance = Math.max(worldHeight / (2 * Math.tan(vFov / 2)), 0.42);
     // Shift the look point down so the clay sits above the bottom sheet.
     const lookY = this.target.y - this.sheetFraction * worldHeight * 0.5;
-
-    const sideY = lookY + distance * 0.02;
-    const sideZ = distance;
-    const orbitDistance = Math.max(distance * 0.95, 0.42);
-    const orbitX = orbitDistance * Math.sin(this.orbitPolar) * Math.sin(this.orbitAzimuth);
-    const orbitY = lookY + orbitDistance * Math.cos(this.orbitPolar) * 0.72;
-    const orbitZ = orbitDistance * Math.sin(this.orbitPolar) * Math.cos(this.orbitAzimuth);
-    const t = this.blend;
-    this.camera.position.set(orbitX * t, sideY * (1 - t) + orbitY * t, sideZ * (1 - t) + orbitZ * t);
+    const horiz = distance * Math.sin(this.polar);
+    this.camera.position.set(
+      horiz * Math.sin(this.azimuth),
+      lookY + distance * Math.cos(this.polar),
+      horiz * Math.cos(this.azimuth),
+    );
     this.camera.lookAt(0, lookY, 0);
+    this.camera.updateMatrixWorld();
   }
 
   /**
    * Aim `pointerRaycaster` through the pointer.
    * Returns canvas CSS pixels (origin top-left) and NDC. Uses its own raycaster
-   * so `profilePoint` can still intersect the side-view plane.
+   * so `profilePoint` can still intersect the view plane.
    */
   aimPointer(
     clientX: number,
@@ -93,19 +155,18 @@ export class CameraRig {
     return sample;
   }
 
-  /** Intersect the pointer with the plane through the wheel axis facing the side camera. */
+  /** Intersect the pointer with the plane through the wheel axis facing the camera. */
   profilePoint(clientX: number, clientY: number, canvas: HTMLCanvasElement): { x: number; y: number } | null {
     const sample = clientNdc(clientX, clientY, canvas);
     if (!sample) return null;
     ndc.set(sample.ndcX, sample.ndcY);
     raycaster.setFromCamera(ndc, this.camera);
-    const origin = raycaster.ray.origin;
-    const direction = raycaster.ray.direction;
-    if (Math.abs(direction.z) < 1e-5) return null;
-    const distance = -origin.z / direction.z;
-    if (distance < 0) return null;
-    hit.copy(origin).addScaledVector(direction, distance);
-    return { x: hit.x, y: hit.y };
+    return profileOnViewPlane(
+      raycaster.ray.origin,
+      raycaster.ray.direction,
+      this.camera.position.x,
+      this.camera.position.z,
+    );
   }
 }
 

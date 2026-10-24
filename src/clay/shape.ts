@@ -10,9 +10,12 @@ import {
   pieceHeight,
   ringAtHeight,
   sanitizeGrid,
+  scaleGaps,
+  scaleRadii,
   smoothVertical,
   touchGrid,
   volume,
+  volumeBetween,
 } from './grid';
 import type { ClayGrid } from '../core/types';
 
@@ -57,6 +60,28 @@ function falloffAt(ring: number, center: number, band: number): number {
   const d = Math.abs(ring - center) / (band + 0.25);
   if (d >= 1) return 0;
   return Math.cos(d * Math.PI * 0.5);
+}
+
+/**
+ * How much of a press runs down the wheel axis.
+ * `directionY` is the y component of the unit ray toward the clay.
+ * 0 when the ray is perpendicular to the axis (side view), 1 when it is
+ * parallel (top view). The middle is linear in the angle, eased so a side
+ * view's slightly tilted rays stay radial and a top view stays an opening.
+ */
+export function axialBlend(directionY: number): number {
+  const down = clamp(-directionY, 0, 1);
+  const angle = Math.acos(down);
+  const t = clamp(1 - angle / (Math.PI / 2), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+/** Map a blend so views near side and top stay pure, and 3/4 stays half. */
+function openWeight(axial: number): number {
+  const t = clamp(axial, 0, 1);
+  if (t <= 0.08) return 0;
+  if (t >= 0.92) return 1;
+  return (t - 0.08) / 0.84;
 }
 
 /**
@@ -127,6 +152,48 @@ export function pressIn(grid: ClayGrid, height: number, stroke: Stroke, clay: Cl
   touchGrid(grid);
 }
 
+export interface ViewPress {
+  /**
+   * 0 when the camera ray is perpendicular to the wheel axis (side view),
+   * 1 when the ray runs along the axis (top view). From `axialBlend`.
+   */
+  axial: number;
+  /** Contact distance from the wheel axis, meters. */
+  radius: number;
+  /** Contact height above the bat, meters. The radial press uses this. */
+  height: number;
+}
+
+/**
+ * Press along the view. Side view collars the wall and the clay rises.
+ * Top view, at the center, opens a well: a floor stays, and the clay that
+ * left the middle thickens that floor and the wall. A 3/4 view does both,
+ * weighted by `axial`.
+ */
+export function pressAlongView(grid: ClayGrid, press: ViewPress, stroke: Stroke, clay: ClayType): void {
+  const open = openWeight(press.axial);
+  const radial = 1 - open;
+  if (open === 0) {
+    pressIn(grid, press.height, stroke, clay);
+    return;
+  }
+  if (radial === 0) {
+    openDown(grid, press.radius, stroke, clay);
+    return;
+  }
+  const target = volume(grid);
+  pressIn(grid, press.height, { ...stroke, pressure: stroke.pressure * radial }, clay);
+  openDown(grid, press.radius, { ...stroke, pressure: stroke.pressure * open }, clay);
+  const now = volume(grid);
+  if (now > 1e-12 && target > 0) {
+    const factor = Math.sqrt(target / now);
+    if (Math.abs(factor - 1) > 1e-6) {
+      scaleRadii(grid, factor);
+      touchGrid(grid);
+    }
+  }
+}
+
 /**
  * Open a well. `openingRadius` is the finger's distance from the axis.
  * Rings above the finger become hollow; displaced clay moves into the wall.
@@ -177,9 +244,14 @@ export function openCenter(
   touchGrid(grid);
 }
 
+let openInnerScratch: Float32Array | null = null;
+
 function smoothOpenInner(grid: ClayGrid, floor: number): void {
   const segs = grid.segments;
-  const next = new Float32Array(grid.inner);
+  const n = grid.inner.length;
+  if (!openInnerScratch || openInnerScratch.length < n) openInnerScratch = new Float32Array(n);
+  const next = openInnerScratch;
+  next.set(grid.inner);
   for (let r = 1; r < grid.rings - 1; r++) {
     if (grid.y[r] < floor) continue;
     for (let s = 0; s < segs; s++) {
@@ -190,7 +262,104 @@ function smoothOpenInner(grid: ClayGrid, floor: number): void {
       next[i] = grid.inner[i] + ((a + c) * 0.5 - grid.inner[i]) * 0.22;
     }
   }
-  grid.inner.set(next);
+  grid.inner.set(next.subarray(0, n));
+}
+
+function openTaper(y: number, floor: number, top: number): number {
+  const span = Math.max(0.008, (top - floor) * 0.22);
+  const t = clamp((y - floor) / span, 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Put `extra` cubic meters back by widening outer radii over the intervals
+ * `[intervalStart, intervalEnd)`. Inner radii stay put, so a floor bulges
+ * and a wall thickens instead of the clay disappearing.
+ */
+function addVolumeOutward(grid: ClayGrid, intervalStart: number, intervalEnd: number, extra: number): void {
+  if (extra <= 1e-10) return;
+  const start = clamp(Math.round(intervalStart), 0, grid.rings - 2);
+  const end = clamp(Math.round(intervalEnd), start + 1, grid.rings);
+  const goal = volumeBetween(grid, start, end) + extra;
+  const ringLast = Math.min(grid.rings - 1, end);
+  for (let iter = 0; iter < 8; iter++) {
+    const current = volumeBetween(grid, start, end);
+    if (current < 1e-12) return;
+    const ratio = goal / current;
+    if (Math.abs(ratio - 1) < 0.003) return;
+    const factor = clamp(Math.sqrt(Math.max(ratio, 0.25)), 0.92, 1.08);
+    for (let r = start; r <= ringLast; r++) {
+      const base = r * grid.segments;
+      for (let s = 0; s < grid.segments; s++) {
+        const i = base + s;
+        grid.outer[i] = Math.max(grid.outer[i] * factor, grid.inner[i] + 0.0008);
+      }
+    }
+  }
+}
+
+/**
+ * Open from above. A center press down the axis leaves a floor, hollows a
+ * well, and puts the displaced clay into the floor (down) and the wall (out).
+ * The rim settles a little, the way a thumb pushes the lump down.
+ */
+function openDown(grid: ClayGrid, hitRadius: number, stroke: Stroke, clay: ClayType): void {
+  const target = volume(grid);
+  const totalH = Math.max(0.01, pieceHeight(grid));
+  const top0 = grid.y[grid.rings - 1];
+  const floorY = grid.y[0] + Math.max(0.006, totalH * 0.16);
+  if (top0 - floorY < 0.008) return;
+  const floorRing = ringAtHeight(grid, floorY);
+  const sampleRing = Math.min(
+    grid.rings - 1,
+    floorRing + Math.max(2, Math.round((grid.rings - floorRing) * 0.45)),
+  );
+  const meanOuter = Math.max(0.012, meanChannel(grid.outer, sampleRing, grid.segments));
+  const blend = frameBlend(stroke, 3.8);
+  if (blend <= 0) return;
+
+  const above = top0 - grid.y[floorRing];
+  const minHeight = Math.max(0.03, meanOuter * 1.05);
+  if (above > 0.012 && totalH > minHeight) {
+    const drop = Math.min(above * 0.15, Math.max(0, totalH - minHeight), framePush(stroke, 0.018));
+    if (drop > 0) scaleGaps(grid, floorRing, clamp((above - drop) / above, 0.9, 1));
+  }
+
+  const floor = grid.y[floorRing];
+  const top = grid.y[grid.rings - 1];
+  const reach = meanOuter * (0.2 + 0.5 * clamp(stroke.pressure, 0, 1));
+  const desired = clamp(Math.max(hitRadius, reach), 0.006, meanOuter * 0.78);
+  const minW = Math.max(0.0012, minWallThickness(clay) * 0.7);
+  for (let r = floorRing; r < grid.rings; r++) {
+    const taper = openTaper(grid.y[r], floor, top);
+    if (taper <= 0) continue;
+    const local = desired * taper;
+    withHand(grid, stroke, (segment, weight) => {
+      const i = clayIndex(r, segment, grid.segments);
+      const outer = grid.outer[i];
+      const inner = grid.inner[i];
+      const goal = Math.min(local, Math.max(0, outer - minW));
+      if (goal > inner) grid.inner[i] = inner + (goal - inner) * blend * weight;
+    });
+  }
+  smoothOpenInner(grid, floor);
+  sanitizeGrid(grid);
+
+  const lost = target - volume(grid);
+  if (lost > 1e-9) {
+    const foot = Math.max(1, floorRing);
+    addVolumeOutward(grid, 0, foot, lost * 0.48);
+    addVolumeOutward(grid, floorRing, grid.rings, Math.max(0, target - volume(grid)));
+  }
+  sanitizeGrid(grid);
+  // A per-frame miss under the shared conserve threshold stacks into lost clay.
+  // Scale once so this stroke ends on the volume it started with.
+  const now = volume(grid);
+  if (now > 1e-12 && target > 0) {
+    const factor = Math.sqrt(target / now);
+    if (Math.abs(factor - 1) > 1e-6) scaleRadii(grid, factor);
+  }
+  touchGrid(grid);
 }
 
 /**

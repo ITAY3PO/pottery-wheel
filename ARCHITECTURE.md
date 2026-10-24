@@ -86,14 +86,15 @@ Segment 0 faces local +Z. The mesh spins with `rotation.y`, so world angle = loc
 
 Volume is the sum of conical frustums per segment. Shaping operations restore it:
 
-- Pressing and centering push the lost volume **up** (gaps above the hand grow).
+- Pressing from the side and centering push the lost volume **up** (gaps above the hand grow).
+- A press whose ray runs down the wheel axis opens the lump instead: a floor stays solid, a well forms above it, and the displaced clay thickens the floor and the wall. Rays in between blend the two by the ray's angle to the axis (`pressAlongView`).
 - Opening preserves cross-sectional area by moving the outer wall out as the well appears.
 - Pulling adds height and thins the wall around its midline.
 - Compressing shortens the upper gaps and thickens them back to the same volume.
 
 A still finger (`|omega| < 2.2 rad/s`) only touches a thumb-sized arc, so dents stay put. A spinning hand is treated as axisymmetric: every segment of the band moves. `evaluateIntegrity` (`src/clay/integrity.ts`) tears walls thinner than `minWallThickness(clay)` and slumps forms that are too wet and too tall for too long. Porcelain's minimum wall is thicker than earthenware's; plasticity is what makes that difference.
 
-Shaping entry points, all pure and unit-tested: `centerClay`, `pressIn`, `openCenter`, `pullUp`, `compressClay`.
+Shaping entry points, all pure and unit-tested: `centerClay`, `pressIn`, `openCenter`, `pullUp`, `compressClay`, `pressAlongView`.
 
 ## Rendering
 
@@ -198,7 +199,7 @@ Wheel audio (`installAudio`) still reads speed and finger pressure from the whee
 
 `ToolPointer`:
 
-- `radius`, `height` — meters, profile plane through the wheel axis (side view).
+- `radius`, `height` — meters, on the profile plane through the wheel axis that faces the camera.
 - `pressure` — 0..1 from how far the finger has pushed past the silhouette (open uses depth below the rim).
 - `side` — `+1` right of the axis, `-1` left.
 - `segment` — the sample facing that side at the current spin.
@@ -206,7 +207,7 @@ Wheel audio (`installAudio`) still reads speed and finger pressure from the whee
 
 Reference tools (this core): `center`, `open`, `pull`, `press`, `compress`, `wire`. They are the pattern to copy. Wire refuses to cut above ~28 rpm; the sheet's "Wire off" action is the same cut with a button.
 
-On the wheel the camera is a fixed side view: pointer x is radius, pointer y is height. Off the wheel, two-finger drag (and right-drag on desktop) orbits. One finger is always the tool.
+The camera eases between top, three-quarter, and side. Two-finger drag (and right-drag on desktop) orbits on or off the wheel. One finger is always the tool. The pointer stays the profile through the wheel axis facing the camera: x is signed radius, y is height, so rib, sponge, needle, trimming, and the other tools keep their plane sample as the view turns. Press is the tool that follows the camera ray at the hit.
 
 ## Stages
 
@@ -216,7 +217,7 @@ interface Stage {
   label: string;
   order: number;
   mountsOnWheel: boolean;
-  allowOrbit: boolean;     // honored only while the piece is off the wheel
+  allowOrbit: boolean;     // two-finger orbit and right-drag, on or off the wheel
   hint: (ctx: StageContext | null) => string;
   actions?: StageAction[]; // { id, label, enabled?, run }
 }
@@ -288,8 +289,8 @@ Helpers:
 ## Mobile
 
 - `touch-action: none` on the canvas. The sheet may pan vertically.
-- One finger: the active tool. Side view on the wheel.
-- Two fingers: orbit, only off the wheel.
+- One finger: the active tool, in whatever view is showing.
+- Two fingers: orbit, on or off the wheel (right-drag on desktop too). Top, 3/4, and Side buttons ease the camera to a preset. Each target is at least 44px.
 - Targets are at least 44px. The sheet sits at the bottom, in thumb reach, and centers on wide screens.
 - Portrait first (Pixel 10a is 412×924 CSS px, DPR 2.625, capped here at 2). Desktop uses the same sheet with a mouse.
 - On a full-width sheet the canvas is only the area above it, so the clay stays in reach and the covered pixels are not drawn. On a wide screen the sheet is centered and the side camera shifts the clay up by about half the sheet's share of the view.

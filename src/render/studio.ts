@@ -203,7 +203,15 @@ export class Studio {
     this.wheelPivot.rotation.y = angle;
   }
 
-  showContact(visible: boolean, x: number, y: number, pressure: number, toolId = ''): void {
+  showContact(
+    visible: boolean,
+    x: number,
+    y: number,
+    pressure: number,
+    toolId = '',
+    z?: number,
+    side?: 1 | -1,
+  ): void {
     this.contact.visible = false;
     for (const mesh of this.toolContacts.values()) mesh.visible = false;
     if (!visible) return;
@@ -213,9 +221,10 @@ export class Studio {
     const mesh = (id && this.toolContacts.get(id)) || this.contact;
     mesh.visible = true;
     const yPos = Math.max(0, y);
-    mesh.position.set(x, yPos, id === 'water' ? 0.018 : 0.014);
+    const zPos = z ?? (id === 'water' ? 0.018 : 0.014);
+    mesh.position.set(x, yPos, zPos);
     const pressed = 0.75 + Math.max(0, Math.min(1, pressure)) * 1.15;
-    const dir = x >= 0 ? 1 : -1;
+    const dir = side ?? (x >= 0 ? 1 : -1);
     if (id === 'needle') mesh.scale.setScalar(1);
     else if (id === 'knife') mesh.scale.set(dir, 0.85 + pressure * 0.35, 0.85 + pressure * 0.35);
     else if (id === 'rib') mesh.scale.set(dir, 1, 1);

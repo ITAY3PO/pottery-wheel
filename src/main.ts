@@ -1,7 +1,7 @@
 import './style.css';
 import './core/listeners';
 import { getClay } from './clay/clays';
-import { centeredness, pieceHeight, segmentAtWorldAngle, silhouette } from './clay/grid';
+import { centeredness, pieceHeight, profileExtent, segmentAtWorldAngle, silhouette } from './clay/grid';
 import { evaluateIntegrity } from './clay/integrity';
 import { events } from './core/events';
 import { vibrate } from './core/haptics';
@@ -14,6 +14,7 @@ import { Studio } from './render/studio';
 import { stepTrimChips } from './tools/trim-chips';
 import { Onboarding } from './ui/onboarding/onboarding';
 import { Shell, type ShellModel } from './ui/shell/shell';
+import { ViewBar } from './ui/views';
 import { Wheel } from './core/wheel';
 import { installAudio } from './audio';
 
@@ -22,7 +23,10 @@ if (!(app instanceof HTMLElement)) throw new Error('Missing #app');
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('role', 'application');
-canvas.setAttribute('aria-label', 'Pottery wheel. One finger shapes the clay. Two fingers orbit once the piece is off the wheel.');
+canvas.setAttribute(
+  'aria-label',
+  'Pottery wheel. One finger shapes the clay. Two fingers orbit. Top, three-quarter, and side change how a press acts.',
+);
 app.append(canvas);
 
 const studio = new Studio(canvas);
@@ -115,6 +119,8 @@ const shell = new Shell(app, {
     studio.syncPiece(null);
     publish();
     events.emit('piece-change', { piece: null });
+    studio.rig.setPreset('side');
+    views.setActive('side');
   },
   onHelp: () => onboarding.replay(),
 });
@@ -134,6 +140,12 @@ onboarding = new Onboarding({
   },
   onLayout: () => resize(),
 });
+
+const views = new ViewBar(app, (preset) => {
+  studio.rig.setPreset(preset);
+  views.setActive(preset);
+});
+views.setActive(studio.rig.preset);
 
 window.addEventListener('resize', () => resize());
 new ResizeObserver(() => resize()).observe(app);
@@ -180,7 +192,6 @@ function frame(now: number): void {
   if (!piece) {
     idleAngle += elapsed * 0.55;
     studio.idleSpin(idleAngle);
-    studio.rig.setMode('side');
     studio.showTrimChips(chips);
     studio.render(elapsed);
     events.emit('frame', { dt: elapsed, piece: null });
@@ -207,7 +218,6 @@ function frame(now: number): void {
     if (integrity.slumped) toast('The clay slumped — too wet, and too tall.');
   }
   studio.syncPiece(piece);
-  studio.rig.setMode(piece.onWheel || !currentStage()?.allowOrbit ? 'side' : 'orbit');
   studio.spin(wheel.angle, piece.onWheel, elapsed);
   updateCursor();
   studio.showTrimChips(chips);
@@ -278,21 +288,29 @@ function updateCursor(): void {
     studio.showWire(true, sample.height, Math.max(0.08, edge * 2.1));
     return;
   }
-  const edge = silhouette(piece.grid, sample.height, studio.clayPivot.rotation.y, sample.side);
-  const x = sample.side * Math.min(sample.radius, Math.max(edge, 0.01));
-  studio.showContact(true, x, sample.height + studio.clayPivot.position.y, sample.pressure, toolId);
+  const az = studio.rig.azimuthAngle;
+  const edge = profileExtent(piece.grid, sample.height, studio.clayPivot.rotation.y, az, sample.side);
+  const signed = sample.side * Math.min(sample.radius, Math.max(edge, 0.01));
+  const nudge = toolId === 'water' ? 0.018 : 0.014;
+  const x = signed * Math.cos(az) + Math.sin(az) * nudge;
+  const z = -signed * Math.sin(az) + Math.cos(az) * nudge;
+  studio.showContact(true, x, sample.height + studio.clayPivot.position.y, sample.pressure, toolId, z, sample.side);
   studio.showWire(false, 0, 0);
+}
+
+function canOrbit(): boolean {
+  return Boolean(currentStage()?.allowOrbit);
 }
 
 function onPointerDown(event: PointerEvent): void {
   if (event.button === 2) {
-    if (piece && !piece.onWheel) rightOrbit = true;
+    if (canOrbit()) rightOrbit = true;
     return;
   }
   if (event.button !== 0) return;
   pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
   canvas.setPointerCapture(event.pointerId);
-  if (pointers.size >= 2 && piece && !piece.onWheel && currentStage()?.allowOrbit) {
+  if (pointers.size >= 2 && canOrbit()) {
     endStroke();
     orbiting = true;
     return;
@@ -308,8 +326,9 @@ function onPointerDown(event: PointerEvent): void {
 function onPointerMove(event: PointerEvent): void {
   const previousPoint = pointers.get(event.pointerId);
   if (!previousPoint && !rightOrbit) return;
-  if (rightOrbit && piece && !piece.onWheel) {
+  if (rightOrbit && canOrbit()) {
     studio.rig.orbitBy(event.movementX, event.movementY);
+    views.setActive(studio.rig.preset);
     return;
   }
   if (!previousPoint) return;
@@ -318,6 +337,7 @@ function onPointerMove(event: PointerEvent): void {
   pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
   if (orbiting && pointers.size >= 2) {
     studio.rig.orbitBy(dx, dy);
+    views.setActive(studio.rig.preset);
     return;
   }
   if (toolDown && !orbiting) latest = { x: event.clientX, y: event.clientY };
@@ -393,7 +413,8 @@ function measure(clientX: number, clientY: number): StrokeSample | null {
   const radius = Math.abs(point.x);
   const height = point.y - studio.clayPivot.position.y;
   const rotation = studio.clayPivot.rotation.y;
-  const edge = Math.max(0.008, silhouette(piece.grid, height, rotation, side));
+  const azimuth = studio.rig.azimuthAngle;
+  const edge = Math.max(0.008, profileExtent(piece.grid, height, rotation, azimuth, side));
   const tool = currentTool();
   let pressure: number;
   if (tool?.id === 'open') {
@@ -406,7 +427,7 @@ function measure(clientX: number, clientY: number): StrokeSample | null {
     const penetration = edge - radius;
     pressure = penetration >= 0 ? clamp01(penetration / 0.016) : clamp01(1 + penetration / 0.012) * 0.35;
   }
-  const worldAngle = side > 0 ? Math.PI / 2 : -Math.PI / 2;
+  const worldAngle = azimuth + (side > 0 ? Math.PI / 2 : -Math.PI / 2);
   return {
     pointer: {
       radius,

@@ -241,7 +241,7 @@ export interface Stage {
   order: number;
   /** Piece can spin with the wheel head. */
   mountsOnWheel: boolean;
-  /** Two-finger orbit (and right-drag on desktop). */
+  /** Two-finger orbit and right-drag, on or off the wheel. */
   allowOrbit: boolean;
   hint: (ctx: StageContext | null) => string;
   actions?: StageAction[];
