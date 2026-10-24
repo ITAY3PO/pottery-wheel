@@ -94,7 +94,7 @@ Volume is the sum of conical frustums per segment. Shaping operations restore it
 
 A still finger (`|omega| < 2.2 rad/s`) only touches a thumb-sized arc, so dents stay put. A spinning hand is treated as axisymmetric: every segment of the band moves. `evaluateIntegrity` (`src/clay/integrity.ts`) tears walls thinner than `minWallThickness(clay)` and slumps forms that are too wet and too tall for too long. Porcelain's minimum wall is thicker than earthenware's; plasticity is what makes that difference.
 
-Shaping entry points, all pure and unit-tested: `centerClay`, `pressIn`, `openCenter`, `pullUp`, `compressClay`.
+Shaping entry points, all pure and unit-tested: `centerClay`, `pressIn`, `openCenter`, `pullUp`, `compressClay`, `pressAlongView`.
 
 ## Rendering
 
@@ -199,7 +199,7 @@ Wheel audio (`installAudio`) still reads speed and finger pressure from the whee
 
 `ToolPointer`:
 
-- `radius`, `height` — meters, profile plane through the wheel axis (side view).
+- `radius`, `height` — meters, on the profile plane through the wheel axis that faces the camera.
 - `pressure` — 0..1 from how far the finger has pushed past the silhouette (open uses depth below the rim).
 - `side` — `+1` right of the axis, `-1` left.
 - `segment` — the sample facing that side at the current spin.
