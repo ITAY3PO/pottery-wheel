@@ -1,12 +1,11 @@
 import type { Attachment, AttachmentKind, AttachmentPoint } from './types';
 
-let attachmentCounter = 1;
-
 /**
  * Build an Attachment record. Geometry is created separately by
  * `buildAttachmentGeometry` in src/render/attachmentMesh.ts so this module
  * stays free of Three.js. The handbuild agent should go through this helper
  * (or match the fields) and push onto `piece.attachments`.
+ * Ids are `att-` plus a UUID so a resumed piece does not collide with `att-1`.
  */
 export function createAttachment(input: {
   id?: string;
@@ -17,13 +16,20 @@ export function createAttachment(input: {
   radialSegments?: number;
 }): Attachment {
   return {
-    id: input.id ?? `att-${attachmentCounter++}`,
+    id: input.id ?? newAttachmentId(),
     kind: input.kind,
     points: input.points.map((point) => ({ ...point })),
     joinBlend: clampJoin(input.joinBlend ?? 0.14),
     tubularSegments: input.tubularSegments ?? 48,
     radialSegments: input.radialSegments ?? 12,
   };
+}
+
+function newAttachmentId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `att-${crypto.randomUUID()}`;
+  }
+  return `att-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function clampJoin(value: number): number {

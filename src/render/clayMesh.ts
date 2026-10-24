@@ -2,6 +2,7 @@ import {
   BufferGeometry,
   Float32BufferAttribute,
   Mesh,
+  MeshPhysicalMaterial,
   Sphere,
   Uint32BufferAttribute,
   Vector3,
@@ -23,7 +24,7 @@ export class ClayMesh {
   private seenRevision = -1;
   private readonly sphere = new Sphere(new Vector3(), 0.3);
 
-  constructor(rings: number, segments: number) {
+  constructor(rings: number, segments: number, material: MeshPhysicalMaterial = createClayMaterial()) {
     this.rings = rings;
     this.segments = segments;
     this.cols = segments + 1;
@@ -34,7 +35,7 @@ export class ClayMesh {
     this.geometry.setAttribute('uv', new Float32BufferAttribute(new Float32Array(count * 2), 2));
     this.geometry.setAttribute('color', new Float32BufferAttribute(new Float32Array(count * 3), 3));
     this.geometry.setIndex(new Uint32BufferAttribute(buildIndices(rings, segments), 1));
-    this.mesh = new Mesh(this.geometry, createClayMaterial());
+    this.mesh = new Mesh(this.geometry, material);
     this.mesh.userData.meshId = 'body';
     this.mesh.frustumCulled = false;
   }

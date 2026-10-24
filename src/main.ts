@@ -1,12 +1,14 @@
 import './style.css';
+import './core/listeners';
 import { getClay } from './clay/clays';
 import { centeredness, pieceHeight, segmentAtWorldAngle, silhouette } from './clay/grid';
 import { evaluateIntegrity } from './clay/integrity';
+import { events } from './core/events';
 import { vibrate } from './core/haptics';
 import { clampWeight, createPiece } from './core/piece';
 import { loadStages, loadTools, stageById, toolsFor } from './core/registry';
 import { clearPiece, hasSavedPiece, loadPiece, savePiece } from './core/storage';
-import type { ClayTypeId, PieceState, Stage, Tool, ToolPointer } from './core/types';
+import type { ClayTypeId, PieceState, Stage, SurfaceHit, Tool, ToolContext, ToolPointer } from './core/types';
 import { Vector3 } from 'three';
 import { Studio } from './render/studio';
 import { stepTrimChips } from './tools/trim-chips';
@@ -41,12 +43,22 @@ const SIM_STEP = 1 / 60;
 const MAX_FRAME = 0.25;
 let toolDown = false;
 let needsDown = false;
+let strokeToolId: string | null = null;
 let rightOrbit = false;
 let orbiting = false;
 let wireWarned = false;
 let lastHaptic = 0;
 let previous: ToolPointer | null = null;
+let lastSample: StrokeSample | null = null;
 let latest: { x: number; y: number } | null = null;
+
+interface StrokeSample {
+  pointer: ToolPointer;
+  screen: { x: number; y: number };
+  ndc: { x: number; y: number };
+  clientX: number;
+  clientY: number;
+}
 const pointers = new Map<number, { x: number; y: number }>();
 
 const shell = new Shell(app, {
@@ -101,6 +113,7 @@ const shell = new Shell(app, {
     activeToolId = 'center';
     studio.syncPiece(null);
     publish();
+    events.emit('piece-change', { piece: null });
   },
 });
 
@@ -134,6 +147,7 @@ function begin(next: PieceState): void {
   studio.syncPiece(next);
   publish();
   savePiece(next);
+  events.emit('piece-change', { piece: next });
 }
 
 function frame(now: number): void {
@@ -149,17 +163,20 @@ function frame(now: number): void {
     studio.rig.setMode('side');
     studio.showTrimChips(chips);
     studio.render(elapsed);
+    events.emit('frame', { dt: elapsed, piece: null });
     requestAnimationFrame(frame);
     return;
   }
 
   let remaining = elapsed;
   let steps = 0;
+  const stroke = toolDown && latest ? measure(latest.x, latest.y) : null;
+  const surfaceHit = stroke ? studio.hitTest() : null;
   while (remaining > 1e-5 && steps < 16) {
     const dt = Math.min(SIM_STEP, remaining);
     remaining -= dt;
     steps += 1;
-    applyStroke(dt, now);
+    applyStroke(dt, now, stroke, surfaceHit);
     wheel.step(dt);
   }
 
@@ -188,17 +205,19 @@ function frame(now: number): void {
   } else if (piece.onWheel) {
     shell.render(model());
   }
+  events.emit('frame', { dt: elapsed, piece });
   requestAnimationFrame(frame);
 }
 
-function applyStroke(dt: number, now: number): void {
+function applyStroke(dt: number, now: number, sample: StrokeSample | null, surfaceHit: SurfaceHit | null): void {
   const tool = currentTool();
-  if (!toolDown || !latest || !tool || !piece) return;
-  const sample = measure(latest.x, latest.y);
-  if (!sample) return;
+  if (!toolDown || !sample || !tool || !piece) return;
   const wasOnWheel = piece.onWheel;
-  const ctx = { piece, wheel, pointer: sample, previous, dt };
+  const ctx = contextFor(sample, dt, surfaceHit);
+  if (!ctx) return;
   if (needsDown) {
+    events.emit('stroke-start', { piece, toolId: tool.id });
+    strokeToolId = tool.id;
     tool.onPointerDown(ctx);
     vibrate(tool.haptics?.down);
     lastHaptic = now;
@@ -206,12 +225,13 @@ function applyStroke(dt: number, now: number): void {
   } else {
     tool.onPointerMove(ctx);
     const interval = tool.haptics?.moveIntervalMs ?? 90;
-    if (sample.pressure > 0.2 && tool.haptics?.move && now - lastHaptic > interval) {
+    if (sample.pointer.pressure > 0.2 && tool.haptics?.move && now - lastHaptic > interval) {
       vibrate(tool.haptics.move);
       lastHaptic = now;
     }
   }
-  previous = sample;
+  previous = sample.pointer;
+  lastSample = sample;
   if (wasOnWheel && !piece.onWheel) {
     wheel.running = false;
     publish();
@@ -223,14 +243,15 @@ function applyStroke(dt: number, now: number): void {
 }
 
 function updateCursor(): void {
-  if (!piece || !toolDown || !latest || !currentTool()) {
+  const toolId = currentTool()?.id ?? '';
+  if (!piece || !toolDown || !latest || !toolId) {
     studio.showContact(false, 0, 0, 0);
     studio.showWire(false, 0, 0);
     return;
   }
   const sample = previous;
   if (!sample) return;
-  if (currentTool()?.id === 'wire') {
+  if (toolId === 'wire') {
     const edge = silhouette(piece.grid, sample.height, studio.clayPivot.rotation.y, 1);
     studio.showContact(false, 0, 0, 0);
     studio.showWire(true, sample.height, Math.max(0.08, edge * 2.1));
@@ -238,7 +259,7 @@ function updateCursor(): void {
   }
   const edge = silhouette(piece.grid, sample.height, studio.clayPivot.rotation.y, sample.side);
   const x = sample.side * Math.min(sample.radius, Math.max(edge, 0.01));
-  studio.showContact(true, x, sample.height + studio.clayPivot.position.y, sample.pressure);
+  studio.showContact(true, x, sample.height + studio.clayPivot.position.y, sample.pressure, toolId);
   studio.showWire(false, 0, 0);
 }
 
@@ -260,6 +281,7 @@ function onPointerDown(event: PointerEvent): void {
   toolDown = true;
   needsDown = true;
   previous = null;
+  lastSample = null;
 }
 
 function onPointerMove(event: PointerEvent): void {
@@ -288,25 +310,64 @@ function onPointerUp(event: PointerEvent): void {
 }
 
 function endStroke(): void {
-  if (toolDown && piece && currentTool()) {
-    const sample = previous ?? (latest ? measure(latest.x, latest.y) : null);
-    if (sample) currentTool()?.onPointerUp({ piece, wheel, pointer: sample, previous, dt: 0.016 });
+  const tool = currentTool();
+  if (toolDown && piece && tool) {
+    let sample = lastSample;
+    if (!sample && latest) sample = measure(latest.x, latest.y);
+    else if (sample) studio.rig.aimPointer(sample.clientX, sample.clientY, canvas);
+    if (sample) {
+      const ctx = contextFor(sample, 0.016, studio.hitTest());
+      if (ctx) tool.onPointerUp(ctx);
+    }
+    if (strokeToolId) events.emit('stroke-end', { piece, toolId: strokeToolId });
     piece.speedSetting = wheel.speed;
     savePiece(piece);
     publish();
   }
+  strokeToolId = null;
   toolDown = false;
   needsDown = false;
   latest = null;
   previous = null;
+  lastSample = null;
   studio.showContact(false, 0, 0, 0);
   studio.showWire(false, 0, 0);
 }
 
-function measure(clientX: number, clientY: number): ToolPointer | null {
+function contextFor(sample: StrokeSample, dt: number, surfaceHit: SurfaceHit | null): ToolContext | null {
   if (!piece) return null;
+  return {
+    piece,
+    wheel,
+    pointer: sample.pointer,
+    previous,
+    dt,
+    screen: sample.screen,
+    ndc: sample.ndc,
+    raycaster: studio.rig.pointerRaycaster,
+    surfaceHit,
+    markSurfaceDirty: (meshId) => studio.markSurfaceDirty(meshId),
+    events,
+  };
+}
+
+function measure(clientX: number, clientY: number): StrokeSample | null {
+  if (!piece) return null;
+  const aim = studio.rig.aimPointer(clientX, clientY, canvas);
+  if (!aim) return null;
+  const screen = { x: aim.x, y: aim.y };
+  const ndc = { x: aim.ndcX, y: aim.ndcY };
   const point = studio.rig.profilePoint(clientX, clientY, canvas);
-  if (!point) return null;
+  if (!point) {
+    if (piece.onWheel) return null;
+    return {
+      pointer: { radius: 0, height: 0, pressure: 0, side: 1, segment: 0, x: 0, y: 0 },
+      screen,
+      ndc,
+      clientX,
+      clientY,
+    };
+  }
   const side: 1 | -1 = point.x >= 0 ? 1 : -1;
   const radius = Math.abs(point.x);
   const height = point.y - studio.clayPivot.position.y;
@@ -326,13 +387,19 @@ function measure(clientX: number, clientY: number): ToolPointer | null {
   }
   const worldAngle = side > 0 ? Math.PI / 2 : -Math.PI / 2;
   return {
-    radius,
-    height,
-    pressure,
-    side,
-    segment: segmentAtWorldAngle(rotation, worldAngle, piece.grid.segments),
-    x: point.x,
-    y: height,
+    pointer: {
+      radius,
+      height,
+      pressure,
+      side,
+      segment: segmentAtWorldAngle(rotation, worldAngle, piece.grid.segments),
+      x: point.x,
+      y: height,
+    },
+    screen,
+    ndc,
+    clientX,
+    clientY,
   };
 }
 

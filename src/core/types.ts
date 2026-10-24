@@ -1,3 +1,4 @@
+import type { Raycaster, Vector3 } from 'three';
 import type { Wheel } from './wheel';
 
 /** Material lifecycle. `setup` is the app screen before a piece exists. */
@@ -132,6 +133,42 @@ export interface ToolPointer {
   y: number;
 }
 
+/**
+ * First UV hit on the body or an attachment.
+ * `point` and `normal` are piece-local (Y up, origin at the bat center), the
+ * same space as `Attachment` points, because clay and attachment meshes sit
+ * at identity under the clay pivot. The vectors are copies; keep them if you
+ * need them after the callback. One frame's sim steps share the same object.
+ */
+export interface SurfaceHit {
+  /** `'body'` or an attachment id. */
+  meshId: string;
+  u: number;
+  v: number;
+  point: Vector3;
+  normal: Vector3;
+}
+
+export interface StudioEventMap {
+  /** Once per animation frame. `dt` is seconds. `piece` is null on the setup screen. */
+  frame: { dt: number; piece: PieceState | null };
+  'stroke-start': { piece: PieceState; toolId: string };
+  'stroke-end': { piece: PieceState; toolId: string };
+  'stage-change': { piece: PieceState; from: StageId; to: StageId };
+  /** `removeFromWheel` actually cut the piece off the bat. */
+  'wire-cut': { piece: PieceState };
+  /** The open piece was replaced or discarded. Not fired on startup. */
+  'piece-change': { piece: PieceState | null };
+}
+
+export type StudioEventName = keyof StudioEventMap;
+
+export interface StudioEvents {
+  on<K extends StudioEventName>(type: K, handler: (payload: StudioEventMap[K]) => void): () => void;
+  off<K extends StudioEventName>(type: K, handler: (payload: StudioEventMap[K]) => void): void;
+  emit<K extends StudioEventName>(type: K, payload: StudioEventMap[K]): void;
+}
+
 export interface ToolContext {
   piece: PieceState;
   wheel: Wheel;
@@ -139,6 +176,21 @@ export interface ToolContext {
   /** Previous sample this stroke, or null on the first frame. */
   previous: ToolPointer | null;
   dt: number;
+  /** Canvas CSS pixels, origin at the canvas top-left. */
+  screen: { x: number; y: number };
+  /** Normalized device coordinates. Each axis is -1..1. */
+  ndc: { x: number; y: number };
+  /**
+   * Camera ray through the pointer. The same object next frame; read it only
+   * inside the callback. `surfaceHit` was produced from this raycaster.
+   */
+  raycaster: Raycaster;
+  /** First hit on `Studio.bodyObjects()`, or null when the ray misses. */
+  surfaceHit: SurfaceHit | null;
+  /** Upload the GPU copy of this mesh's surface map (`'body'` or an attachment id). */
+  markSurfaceDirty(meshId: string): void;
+  /** Studio bus. Same object as `events` from `src/core/events.ts`. */
+  events: StudioEvents;
 }
 
 export interface ToolHaptics {

@@ -1,8 +1,9 @@
 /**
  * STUB — surface agent.
  * Bisque is porous and takes glaze and underglaze. Paint into the body
- * MeshSurface (glazeId, thickness, underglazeId) using raycastToUV.
- * Wax resist sets the wax texel. Then `transition(piece, 'glazed')`.
+ * MeshSurface (glazeId, thickness, underglazeId) from `ctx.surfaceHit`.
+ * Wax resist sets the wax texel. Call `ctx.markSurfaceDirty(meshId)`.
+ * Then `transition(piece, 'glazed')`.
  */
 import type { Stage } from '../core/types';
 

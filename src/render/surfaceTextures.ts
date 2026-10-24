@@ -3,6 +3,7 @@ import {
   DataTexture,
   FloatType,
   LinearFilter,
+  NearestFilter,
   RedFormat,
   UnsignedByteType,
 } from 'three';
@@ -17,18 +18,10 @@ export interface SurfaceTextures {
 }
 
 export function createSurfaceTextures(map: SurfaceMap): SurfaceTextures {
-  const glazeId = new DataTexture(map.glazeId, map.width, map.height, RedFormat, UnsignedByteType);
-  const thickness = new DataTexture(map.thickness, map.width, map.height, RedFormat, FloatType);
-  const wax = new DataTexture(map.wax, map.width, map.height, RedFormat, UnsignedByteType);
-  const underglaze = new DataTexture(map.underglazeId, map.width, map.height, RedFormat, UnsignedByteType);
-  for (const texture of [glazeId, thickness, wax, underglaze]) {
-    texture.wrapS = ClampToEdgeWrapping;
-    texture.wrapT = ClampToEdgeWrapping;
-    texture.magFilter = LinearFilter;
-    texture.minFilter = LinearFilter;
-    texture.flipY = false;
-    texture.needsUpdate = true;
-  }
+  const glazeId = byteTexture(map.glazeId, map.width, map.height);
+  const thickness = floatTexture(map.thickness, map.width, map.height);
+  const wax = byteTexture(map.wax, map.width, map.height);
+  const underglaze = byteTexture(map.underglazeId, map.width, map.height);
   return { glazeId, thickness, wax, underglaze };
 }
 
@@ -37,4 +30,52 @@ export function markSurfaceTexturesDirty(textures: SurfaceTextures): void {
   textures.thickness.needsUpdate = true;
   textures.wax.needsUpdate = true;
   textures.underglaze.needsUpdate = true;
+}
+
+export function disposeSurfaceTextures(textures: SurfaceTextures): void {
+  textures.glazeId.dispose();
+  textures.thickness.dispose();
+  textures.wax.dispose();
+  textures.underglaze.dispose();
+}
+
+/** True when the GPU copies still wrap this map's typed arrays. */
+export function surfaceTexturesMatch(textures: SurfaceTextures, map: SurfaceMap): boolean {
+  return (
+    textureData(textures.glazeId) === map.glazeId &&
+    textureData(textures.thickness) === map.thickness &&
+    textureData(textures.wax) === map.wax &&
+    textureData(textures.underglaze) === map.underglazeId
+  );
+}
+
+function byteTexture(data: Uint8Array, width: number, height: number): DataTexture {
+  const texture = new DataTexture(data, width, height, RedFormat, UnsignedByteType);
+  texture.wrapS = ClampToEdgeWrapping;
+  texture.wrapT = ClampToEdgeWrapping;
+  texture.magFilter = LinearFilter;
+  texture.minFilter = LinearFilter;
+  texture.generateMipmaps = false;
+  texture.flipY = false;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function floatTexture(data: Float32Array, width: number, height: number): DataTexture {
+  const texture = new DataTexture(data, width, height, RedFormat, FloatType);
+  texture.wrapS = ClampToEdgeWrapping;
+  texture.wrapT = ClampToEdgeWrapping;
+  // Linear filtering of float textures needs OES_texture_float_linear.
+  // Nearest is core on WebGL2, including phones that omit that extension.
+  texture.magFilter = NearestFilter;
+  texture.minFilter = NearestFilter;
+  texture.generateMipmaps = false;
+  texture.flipY = false;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function textureData(texture: DataTexture): ArrayBufferView | null {
+  const image = texture.image as { data?: ArrayBufferView } | null;
+  return image?.data ?? null;
 }

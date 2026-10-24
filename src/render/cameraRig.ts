@@ -10,6 +10,8 @@ const hit = new Vector3();
  */
 export class CameraRig {
   readonly camera = new PerspectiveCamera(32, 1, 0.02, 30);
+  /** Ray through the latest pointer. Stable until the next `aimPointer`. */
+  readonly pointerRaycaster = new Raycaster();
   mode: 'side' | 'orbit' = 'side';
   private orbitAzimuth = 0.42;
   private orbitPolar = 1.08;
@@ -74,11 +76,28 @@ export class CameraRig {
     this.camera.lookAt(0, lookY, 0);
   }
 
+  /**
+   * Aim `pointerRaycaster` through the pointer.
+   * Returns canvas CSS pixels (origin top-left) and NDC. Uses its own raycaster
+   * so `profilePoint` can still intersect the side-view plane.
+   */
+  aimPointer(
+    clientX: number,
+    clientY: number,
+    canvas: HTMLCanvasElement,
+  ): { x: number; y: number; ndcX: number; ndcY: number } | null {
+    const sample = clientNdc(clientX, clientY, canvas);
+    if (!sample) return null;
+    ndc.set(sample.ndcX, sample.ndcY);
+    this.pointerRaycaster.setFromCamera(ndc, this.camera);
+    return sample;
+  }
+
   /** Intersect the pointer with the plane through the wheel axis facing the side camera. */
   profilePoint(clientX: number, clientY: number, canvas: HTMLCanvasElement): { x: number; y: number } | null {
-    const rect = canvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return null;
-    ndc.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    const sample = clientNdc(clientX, clientY, canvas);
+    if (!sample) return null;
+    ndc.set(sample.ndcX, sample.ndcY);
     raycaster.setFromCamera(ndc, this.camera);
     const origin = raycaster.ray.origin;
     const direction = raycaster.ray.direction;
@@ -88,4 +107,21 @@ export class CameraRig {
     hit.copy(origin).addScaledVector(direction, distance);
     return { x: hit.x, y: hit.y };
   }
+}
+
+function clientNdc(
+  clientX: number,
+  clientY: number,
+  canvas: HTMLCanvasElement,
+): { x: number; y: number; ndcX: number; ndcY: number } | null {
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return null;
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  return {
+    x,
+    y,
+    ndcX: (x / rect.width) * 2 - 1,
+    ndcY: -(y / rect.height) * 2 + 1,
+  };
 }

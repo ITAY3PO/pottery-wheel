@@ -19,6 +19,21 @@ describe('fixed clay mesh', () => {
   });
 });
 
+describe('attachment ids', () => {
+  it('does not restart at att-1 after a reload', () => {
+    const points = [
+      { x: 0.05, y: 0.04, z: 0, radius: 0.006 },
+      { x: 0.05, y: 0.12, z: 0, radius: 0.006 },
+    ];
+    const first = createAttachment({ kind: 'handle', points });
+    const second = createAttachment({ kind: 'handle', points });
+    expect(first.id).not.toBe(second.id);
+    expect(first.id.startsWith('att-')).toBe(true);
+    expect(first.id).not.toMatch(/^att-\d+$/);
+    expect(second.id).not.toMatch(/^att-\d+$/);
+  });
+});
+
 describe('attachment tube', () => {
   it('sweeps a flared tube with u around and v along', () => {
     const attachment = createAttachment({
