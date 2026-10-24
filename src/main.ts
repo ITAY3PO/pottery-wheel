@@ -9,6 +9,7 @@ import { clearPiece, hasSavedPiece, loadPiece, savePiece } from './core/storage'
 import type { ClayTypeId, PieceState, Stage, Tool, ToolPointer } from './core/types';
 import { Vector3 } from 'three';
 import { Studio } from './render/studio';
+import { stepTrimChips } from './tools/trim-chips';
 import { Shell, type ShellModel } from './ui/shell/shell';
 import { Wheel } from './core/wheel';
 
@@ -134,10 +135,12 @@ function frame(now: number): void {
   // lands on the step where the finger actually moved.
   const elapsed = Math.min(MAX_FRAME, Math.max(0, (now - last) / 1000));
   last = now;
+  const chips = stepTrimChips(elapsed);
   if (!piece) {
     idleAngle += elapsed * 0.55;
     studio.idleSpin(idleAngle);
     studio.rig.setMode('side');
+    studio.showTrimChips(chips);
     studio.render(elapsed);
     requestAnimationFrame(frame);
     return;
@@ -163,6 +166,7 @@ function frame(now: number): void {
   studio.rig.setMode(piece.onWheel || !currentStage()?.allowOrbit ? 'side' : 'orbit');
   studio.spin(wheel.angle, piece.onWheel, elapsed);
   updateCursor();
+  studio.showTrimChips(chips);
   studio.render(elapsed);
 
   saveTimer += elapsed;

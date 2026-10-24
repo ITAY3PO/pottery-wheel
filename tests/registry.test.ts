@@ -4,8 +4,27 @@ import { loadStages, loadTools } from '../src/core/registry';
 describe('registries', () => {
   it('discovers tools and stages by file, without a hand-written index', () => {
     const ids = loadTools().map((tool) => tool.id);
-    expect(ids.length).toBeGreaterThanOrEqual(6);
-    expect(ids).toEqual(expect.arrayContaining(['center', 'open', 'pull', 'press', 'compress', 'wire']));
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        'center',
+        'open',
+        'pull',
+        'press',
+        'compress',
+        'wire',
+        'water',
+        'rib',
+        'sponge',
+        'needle',
+        'knife',
+        'trim-center',
+        'trim-tap',
+        'trim-round',
+        'trim-square',
+        'trim-ribbon',
+      ]),
+    );
     expect(loadStages().map((stage) => stage.id)).toEqual([
       'setup',
       'wet',
