@@ -9,12 +9,11 @@ import {
   MeshPhysicalMaterial,
   MeshStandardMaterial,
   PerspectiveCamera,
-  PMREMGenerator,
   Scene,
   SRGBColorSpace,
   WebGLRenderer,
 } from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { installBakedRoom } from '../render/roomEnvironment';
 import { getClay } from '../clay/clays';
 import { pieceHeight } from '../clay/grid';
 import type { PieceState } from '../core/types';
@@ -22,6 +21,7 @@ import { buildAttachmentGeometry } from '../render/attachmentMesh';
 import { ClayMesh } from '../render/clayMesh';
 import { applyFiredLook } from '../firing/look';
 import { applyClayFinish, bindSurfaceUniforms, createClayMaterial } from '../render/materials';
+import { currentProfile } from '../render/quality';
 import { createSurfaceTextures, type SurfaceTextures } from '../render/surfaceTextures';
 
 /**
@@ -60,12 +60,14 @@ export class Turntable {
   private heightM = 0.08;
   private radiusM = 0.05;
   private sheetHeight = () => 0;
+  private shadersReady = false;
+  private shaderWarm: Promise<void> | null = null;
   private readonly onDown: (event: PointerEvent) => void;
   private readonly onMove: (event: PointerEvent) => void;
   private readonly onUp: (event: PointerEvent) => void;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    const pixelRatio = currentProfile().pixelRatio;
     this.renderer = new WebGLRenderer({
       canvas,
       antialias: pixelRatio < 1.5,
@@ -77,11 +79,12 @@ export class Turntable {
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.12;
     this.renderer.setClearColor(new Color('#3a2e28'), 1);
+    this.renderer.debug.checkShaderErrors =
+      import.meta.env.DEV || import.meta.env.MODE === 'test' || new URLSearchParams(location.search).has('debug');
     this.scene.background = new Color('#3a2e28');
-
-    const pmrem = new PMREMGenerator(this.renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    pmrem.dispose();
+    void installBakedRoom(this.renderer, this.scene).catch(() => {
+      // The key light still describes the room when the map cannot be fetched.
+    });
 
     const hemi = new HemisphereLight(0xfff6ec, 0x3a2a22, 0.55);
     const key = new DirectionalLight(0xfff0dc, 3.3);
@@ -160,7 +163,7 @@ export class Turntable {
     const width = this.canvas.clientWidth;
     const height = this.canvas.clientHeight;
     if (width < 2 || height < 2) return;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(currentProfile().pixelRatio);
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / Math.max(1, height);
     this.camera.updateProjectionMatrix();
@@ -228,6 +231,13 @@ export class Turntable {
       this.last = now;
       if (!this.dragging && !this.auto && now >= this.resumeAt) this.auto = true;
       if (this.auto) this.pivot.rotation.y += dt * 0.55;
+      if (!this.shadersReady) {
+        this.shaderWarm ??= this.renderer.compileAsync(this.scene, this.camera).then(() => {
+          this.shadersReady = true;
+        });
+        this.frameId = requestAnimationFrame(tick);
+        return;
+      }
       this.renderer.render(this.scene, this.camera);
       this.frameId = requestAnimationFrame(tick);
     };

@@ -17,28 +17,94 @@ export function buildAttachmentGeometry(attachment: Attachment): BufferGeometry 
   if (attachment.points.length < 2) {
     geometry.setAttribute('position', new Float32BufferAttribute([0, 0, 0], 3));
     geometry.setAttribute('normal', new Float32BufferAttribute([0, 1, 0], 3));
-    const uv = new Float32BufferAttribute([0, 0], 2);
-    uv.name = 'uv';
-    geometry.setAttribute('uv', uv);
+    const emptyUv = new Float32BufferAttribute([0, 0], 2);
+    emptyUv.name = 'uv';
+    geometry.setAttribute('uv', emptyUv);
     return geometry;
   }
 
+  const tubular = Math.max(2, attachment.tubularSegments | 0);
+  const radial = Math.max(3, attachment.radialSegments | 0);
+  const count = (tubular + 1) * (radial + 1);
+  const positions = new Float32Array(count * 3);
+  const normals = new Float32Array(count * 3);
+  const uvs = new Float32Array(count * 2);
+  fillTube(attachment, tubular, radial, positions, normals, uvs);
+
+  const indices = new Uint32Array(tubular * radial * 6);
+  let w = 0;
+  const cols = radial + 1;
+  for (let i = 0; i < tubular; i++) {
+    for (let j = 0; j < radial; j++) {
+      const a = i * cols + j;
+      const b = a + 1;
+      const c = a + cols;
+      const d = c + 1;
+      indices[w++] = a;
+      indices[w++] = b;
+      indices[w++] = c;
+      indices[w++] = b;
+      indices[w++] = d;
+      indices[w++] = c;
+    }
+  }
+
+  geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('normal', new Float32BufferAttribute(normals, 3));
+  const uv = new Float32BufferAttribute(uvs, 2);
+  uv.name = 'uv';
+  geometry.setAttribute('uv', uv);
+  geometry.setIndex(new Uint32BufferAttribute(indices, 1));
+  return geometry;
+}
+
+/**
+ * Rewrite an existing tube when the point list changes but the segment
+ * counts do not. Returns false when the topology differs and the caller
+ * should build a new geometry instead of disposing every drag frame.
+ */
+export function writeAttachmentGeometry(geometry: BufferGeometry, attachment: Attachment): boolean {
+  if (attachment.points.length < 2) return false;
+  const position = geometry.getAttribute('position') as Float32BufferAttribute | undefined;
+  const normal = geometry.getAttribute('normal') as Float32BufferAttribute | undefined;
+  const uv = geometry.getAttribute('uv') as Float32BufferAttribute | undefined;
+  if (!position || !normal || !uv) return false;
+  const tubular = Math.max(2, attachment.tubularSegments | 0);
+  const radial = Math.max(3, attachment.radialSegments | 0);
+  const count = (tubular + 1) * (radial + 1);
+  if (position.count !== count || normal.count !== count || uv.count !== count) return false;
+  fillTube(
+    attachment,
+    tubular,
+    radial,
+    position.array as Float32Array,
+    normal.array as Float32Array,
+    uv.array as Float32Array,
+  );
+  position.needsUpdate = true;
+  normal.needsUpdate = true;
+  uv.needsUpdate = true;
+  return true;
+}
+
+function fillTube(
+  attachment: Attachment,
+  tubular: number,
+  radial: number,
+  positions: Float32Array,
+  normals: Float32Array,
+  uvs: Float32Array,
+): void {
+  resetVectorPool();
   const curve = new CatmullRomCurve3(
-    attachment.points.map((point) => new Vector3(point.x, point.y, point.z)),
+    attachment.points.map((point) => pooledVector(point.x, point.y, point.z)),
     false,
     'catmullrom',
     0.5,
   );
-  const tubular = Math.max(2, attachment.tubularSegments | 0);
-  const radial = Math.max(3, attachment.radialSegments | 0);
   const frames = parallelFrames(curve, tubular);
   const radii = radiusSamples(attachment, tubular);
   const cols = radial + 1;
-  const rows = tubular + 1;
-  const count = rows * cols;
-  const positions = new Float32Array(count * 3);
-  const normals = new Float32Array(count * 3);
-  const uvs = new Float32Array(count * 2);
 
   for (let i = 0; i <= tubular; i++) {
     const t = i / tubular;
@@ -69,31 +135,23 @@ export function buildAttachmentGeometry(attachment: Attachment): BufferGeometry 
       uvs[idx * 2 + 1] = t;
     }
   }
+}
 
-  const indices = new Uint32Array(tubular * radial * 6);
-  let w = 0;
-  for (let i = 0; i < tubular; i++) {
-    for (let j = 0; j < radial; j++) {
-      const a = i * cols + j;
-      const b = a + 1;
-      const c = a + cols;
-      const d = c + 1;
-      indices[w++] = a;
-      indices[w++] = b;
-      indices[w++] = c;
-      indices[w++] = b;
-      indices[w++] = d;
-      indices[w++] = c;
-    }
+const vectorPool: Vector3[] = [];
+let vectorCursor = 0;
+
+function pooledVector(x: number, y: number, z: number): Vector3 {
+  let vector = vectorPool[vectorCursor];
+  if (!vector) {
+    vector = new Vector3();
+    vectorPool[vectorCursor] = vector;
   }
+  vectorCursor += 1;
+  return vector.set(x, y, z);
+}
 
-  geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('normal', new Float32BufferAttribute(normals, 3));
-  const uv = new Float32BufferAttribute(uvs, 2);
-  uv.name = 'uv';
-  geometry.setAttribute('uv', uv);
-  geometry.setIndex(new Uint32BufferAttribute(indices, 1));
-  return geometry;
+function resetVectorPool(): void {
+  vectorCursor = 0;
 }
 
 function parallelFrames(curve: CatmullRomCurve3, tubular: number) {

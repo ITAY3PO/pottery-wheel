@@ -1,20 +1,14 @@
 import { PerspectiveCamera, Raycaster, Vector2, Vector3 } from 'three';
+import { VIEW_PRESETS, type ViewPreset } from './viewPresets';
+
+export { VIEW_PRESETS, type ViewPreset } from './viewPresets';
 
 const raycaster = new Raycaster();
 const ndc = new Vector2();
 
-/** Horizontal angle of the historical side camera: almost level, a hair above the bat. */
-const SIDE_POLAR = Math.atan2(1, 0.02);
+const SIDE_POLAR = VIEW_PRESETS.find((preset) => preset.id === 'side')?.polar ?? Math.atan2(1, 0.02);
 const POLAR_MIN = 0.12;
 const POLAR_MAX = SIDE_POLAR;
-
-export type ViewPreset = 'top' | 'three-quarter' | 'side';
-
-export const VIEW_PRESETS: readonly { id: ViewPreset; label: string; polar: number; azimuth: number }[] = [
-  { id: 'top', label: 'Top', polar: 0.18, azimuth: 0 },
-  { id: 'three-quarter', label: '3/4', polar: Math.PI / 4, azimuth: 0.62 },
-  { id: 'side', label: 'Side', polar: SIDE_POLAR, azimuth: 0 },
-];
 
 /**
  * Signed radius (x) and height (y) where a ray crosses the vertical plane
@@ -71,6 +65,21 @@ export class CameraRig {
   /** Camera's horizontal angle around the wheel axis. 0 sits on +Z, the old side view. */
   get azimuthAngle(): number {
     return this.azimuth;
+  }
+
+  /**
+   * True while a preset or a reframed look point still has a visible remainder.
+   * The ease is exponential, so a fixed timer stops about 1.3% short.
+   */
+  get easing(): boolean {
+    let dAz = this.targetAzimuth - this.azimuth;
+    dAz = Math.atan2(Math.sin(dAz), Math.cos(dAz));
+    if (Math.abs(dAz) > 0.0008) return true;
+    if (Math.abs(this.targetPolar - this.polar) > 0.0008) return true;
+    const dx = this.desired.x - this.target.x;
+    const dy = this.desired.y - this.target.y;
+    const dz = this.desired.z - this.target.z;
+    return dx * dx + dy * dy + dz * dz > 1e-8;
   }
 
   /** Ease to a preset. The drag path is left alone until the angles arrive. */

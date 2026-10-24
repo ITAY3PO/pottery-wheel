@@ -108,7 +108,18 @@ Shaping entry points, all pure and unit-tested: `centerClay`, `pressIn`, `openCe
 
 `v` is arc length along the mean profile. `u` is angle. Interior vertices are slightly darker; torn samples are marked in the vertex color.
 
-The studio is one warm directional light plus a `RoomEnvironment` PMREM. No shadow maps. `devicePixelRatio` is capped at 2. Wet clay is a `MeshPhysicalMaterial` (low roughness, high clearcoat, a little sheen).
+The studio is one warm directional light. A baked `RoomEnvironment` PMREM (`public/room-pmrem.bin`, a half-float CubeUV map) is bound when the piece reaches bisque, including when a fired piece is resumed, and the gallery binds its own copy, so the opening paint does not compile the env-map programs. The shell, onboarding, and share text paint before Three.js. A `#p1.` link or a dev session boots immediately; other production loads use `requestIdleCallback` with a 1500ms timeout. The boot chunk builds the DOM before it imports the renderer. Shader programs compile one mesh at a time while the canvas is detached. `checkShaderErrors` is on in dev, tests, and `?debug`, and off otherwise. The context asks for `desynchronized` presentation. Only the boot chunk is modulepreloaded; evaluation of Three.js waits for the dynamic import. A `#p1.` share link shows its text without waiting for the canvas. Wet clay is a `MeshPhysicalMaterial` (low roughness, high clearcoat, a little sheen). The render loop stops when the wheel is still and no finger is down, and starts again for a press, a spin, or while the camera ease still has a remainder. The frame that restarts the loop is one sim step and is not a quality sample.
+
+`src/render/quality.ts` picks a render budget. The simulation grid stays full; only the drawn mesh is decimated.
+
+| Tier | Pixel ratio cap | Render mesh | Shadows |
+| --- | --- | --- | --- |
+| Low | 1 | 80×36 | off |
+| Medium | 1.25 | 120×48 | off |
+| High | 1.5 | full grid | off |
+| High + shadows | 2 | full grid | PCF, 512px |
+
+Auto starts at medium on a phone (coarse pointer or `devicePixelRatio` ≥ 2), at high+shadows when the ratio is ≤ 1.25, and at high otherwise. It steps down when the frame-time average stays above 18.5ms and steps up only after a long run of fast frames. Low / Medium / High in the settings sheet lock the tier. The choice is stored in `localStorage` under `pottery-wheel:quality`. Manual mode does not adapt.
 
 ### Material hooks (firing and glaze)
 
@@ -292,7 +303,8 @@ Helpers:
 - One finger: the active tool, in whatever view is showing.
 - Two fingers: orbit, on or off the wheel (right-drag on desktop too). Top, 3/4, and Side buttons ease the camera to a preset. Each target is at least 44px.
 - Targets are at least 44px. The sheet sits at the bottom, in thumb reach, and centers on wide screens.
-- Portrait first (Pixel 10a is 412×924 CSS px, DPR 2.625, capped here at 2). Desktop uses the same sheet with a mouse.
+- Portrait first (Pixel 10a is 412×924 CSS px, DPR 2.625). Auto quality caps that phone at 1.25 until frames prove it can spend more. Desktop uses the same sheet with a mouse.
+- Installable PWA. `vite-plugin-pwa` emits a manifest (`start_url` and `scope` `/pottery-wheel/`) and a service worker that precaches the app shell. Registration is prompt-only in production, so a waiting worker shows “New version, tap to reload” instead of taking the page over. Share links stay in the URL hash, which the worker never sees. The Open Graph tags stay in `index.html`.
 - On a full-width sheet the canvas is only the area above it, so the clay stays in reach and the covered pixels are not drawn. On a wide screen the sheet is centered and the side camera shifts the clay up by about half the sheet's share of the view.
 
 ## Commands
@@ -303,6 +315,8 @@ npm run dev          # http://localhost:5173/pottery-wheel/
 npm run typecheck
 npm test
 npm run build        # tsc + vite build, output in dist/
+npm run e2e          # Playwright smoke against vite preview, Pixel-sized
+npm run lighthouse   # mobile performance against dist; fails under 90
 ```
 
-CI (`.github/workflows/ci.yml`) typechecks, tests, and runs `npm run build` on every pull request. `.github/workflows/pages.yml` builds and deploys to GitHub Pages with `actions/upload-pages-artifact` and `actions/deploy-pages` on push to `main`. The repository Pages source is GitHub Actions.
+CI (`.github/workflows/ci.yml`) typechecks, tests, builds, runs the Playwright smoke, and runs Lighthouse on every pull request. `.github/workflows/pages.yml` builds and deploys to GitHub Pages with `actions/upload-pages-artifact` and `actions/deploy-pages` on push to `main`. The repository Pages source is GitHub Actions. The Pages artifact is `dist/`, including the service worker and manifest.

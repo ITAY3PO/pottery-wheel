@@ -1,4 +1,4 @@
-import { VIEW_PRESETS, type ViewPreset } from '../render/cameraRig';
+import { VIEW_PRESETS, type ViewPreset } from '../render/viewPresets';
 
 /**
  * Top / 3/4 / side. Finger-sized, and off the clay so a tap is not a press.

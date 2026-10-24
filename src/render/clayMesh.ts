@@ -1,5 +1,6 @@
 import {
   BufferGeometry,
+  DynamicDrawUsage,
   Float32BufferAttribute,
   Mesh,
   MeshPhysicalMaterial,
@@ -22,18 +23,31 @@ export class ClayMesh {
   readonly segments: number;
   private readonly cols: number;
   private seenRevision = -1;
+  private sourceRings = -1;
+  private sourceSegments = -1;
+  private tornHash = 0;
+  private colorsReady = false;
+  private readonly sin: Float32Array;
+  private readonly cos: Float32Array;
   private readonly sphere = new Sphere(new Vector3(), 0.3);
 
   constructor(rings: number, segments: number, material: MeshPhysicalMaterial = createClayMaterial()) {
     this.rings = rings;
     this.segments = segments;
     this.cols = segments + 1;
+    this.sin = new Float32Array(this.cols);
+    this.cos = new Float32Array(this.cols);
+    for (let c = 0; c <= segments; c++) {
+      const theta = (c / segments) * Math.PI * 2;
+      this.sin[c] = Math.sin(theta);
+      this.cos[c] = Math.cos(theta);
+    }
     this.geometry = new BufferGeometry();
     const count = rings * this.cols * 2;
-    this.geometry.setAttribute('position', new Float32BufferAttribute(new Float32Array(count * 3), 3));
-    this.geometry.setAttribute('normal', new Float32BufferAttribute(new Float32Array(count * 3), 3));
-    this.geometry.setAttribute('uv', new Float32BufferAttribute(new Float32Array(count * 2), 2));
-    this.geometry.setAttribute('color', new Float32BufferAttribute(new Float32Array(count * 3), 3));
+    this.geometry.setAttribute('position', dynamicAttr(count * 3, 3));
+    this.geometry.setAttribute('normal', dynamicAttr(count * 3, 3));
+    this.geometry.setAttribute('uv', dynamicAttr(count * 2, 2));
+    this.geometry.setAttribute('color', dynamicAttr(count * 3, 3));
     this.geometry.setIndex(new Uint32BufferAttribute(buildIndices(rings, segments), 1));
     this.mesh = new Mesh(this.geometry, material);
     this.mesh.userData.meshId = 'body';
@@ -44,13 +58,24 @@ export class ClayMesh {
     return this.rings * this.cols * 2;
   }
 
-  /** Upload positions if the grid changed. Returns true when buffers were rewritten. */
+  /**
+   * Upload positions if the grid changed. A coarser mesh samples the grid;
+   * the grid itself is never resized. Returns true when buffers were rewritten.
+   */
   update(grid: ClayGrid): boolean {
-    if (grid.rings !== this.rings || grid.segments !== this.segments) {
+    if (grid.rings < this.rings || grid.segments < this.segments) {
       throw new Error('ClayMesh grid size is fixed; construct a new mesh when it changes');
     }
-    if (grid.revision === this.seenRevision) return false;
+    if (
+      grid.revision === this.seenRevision &&
+      grid.rings === this.sourceRings &&
+      grid.segments === this.sourceSegments
+    ) {
+      return false;
+    }
     this.seenRevision = grid.revision;
+    this.sourceRings = grid.rings;
+    this.sourceSegments = grid.segments;
     this.write(grid);
     return true;
   }
@@ -67,26 +92,36 @@ export class ClayMesh {
     const { rings, segments, cols } = this;
     const arcOuter = currentArc(grid, 'outer');
     const arcInner = currentArc(grid, 'inner');
+    const direct = grid.rings === rings && grid.segments === segments;
+    const tornHash = hashTorn(grid.torn);
+    const writeColor = !this.colorsReady || tornHash !== this.tornHash;
+    this.tornHash = tornHash;
+    this.colorsReady = true;
     let maxRadius = 0.05;
 
     const vert = (surface: 0 | 1, ring: number, colIndex: number) => (surface * rings + ring) * cols + colIndex;
+    const srcRing = (ring: number) =>
+      direct ? ring : Math.round((ring * (grid.rings - 1)) / Math.max(1, rings - 1));
+    const srcSeg = (seg: number) => (direct ? seg : Math.round((seg * grid.segments) / segments) % grid.segments);
 
     for (let surface = 0; surface < 2; surface++) {
       const radii = surface === 0 ? grid.outer : grid.inner;
       const arcs = surface === 0 ? arcOuter : arcInner;
       for (let ring = 0; ring < rings; ring++) {
-        const y = grid.y[ring];
-        const yPrev = grid.y[Math.max(0, ring - 1)];
-        const yNext = grid.y[Math.min(rings - 1, ring + 1)];
+        const srcR = srcRing(ring);
+        const srcPrev = srcRing(Math.max(0, ring - 1));
+        const srcNext = srcRing(Math.min(rings - 1, ring + 1));
+        const y = grid.y[srcR];
+        const yPrev = grid.y[srcPrev];
+        const yNext = grid.y[srcNext];
         for (let c = 0; c <= segments; c++) {
-          const seg = c % segments;
-          const theta = (c / segments) * Math.PI * 2;
-          const radius = radii[ring * segments + seg];
+          const seg = srcSeg(c % segments);
+          const radius = radii[srcR * grid.segments + seg];
           if (radius > maxRadius) maxRadius = radius;
-          const rPrev = radii[Math.max(0, ring - 1) * segments + seg];
-          const rNext = radii[Math.min(rings - 1, ring + 1) * segments + seg];
-          const sin = Math.sin(theta);
-          const cos = Math.cos(theta);
+          const rPrev = radii[srcPrev * grid.segments + seg];
+          const rNext = radii[srcNext * grid.segments + seg];
+          const sin = this.sin[c];
+          const cos = this.cos[c];
           const vi = vert(surface as 0 | 1, ring, c);
           pos[vi * 3] = radius * sin;
           pos[vi * 3 + 1] = y;
@@ -111,19 +146,21 @@ export class ClayMesh {
           nor[vi * 3 + 2] = (nr * cos) / nLen;
 
           uvs[vi * 2] = c / segments;
-          uvs[vi * 2 + 1] = arcs[ring] ?? ring / (rings - 1);
+          uvs[vi * 2 + 1] = arcs[srcR] ?? srcR / Math.max(1, grid.rings - 1);
 
-          const torn = grid.torn[ring * segments + seg] === 1;
-          let shade = surface === 1 ? 0.74 : 1;
-          if (ring === 0) shade *= 0.68;
-          if (torn) {
-            col[vi * 3] = 0.42 * shade;
-            col[vi * 3 + 1] = 0.24 * shade;
-            col[vi * 3 + 2] = 0.2 * shade;
-          } else {
-            col[vi * 3] = shade;
-            col[vi * 3 + 1] = shade;
-            col[vi * 3 + 2] = shade;
+          if (writeColor) {
+            const torn = grid.torn[srcR * grid.segments + seg] === 1;
+            let shade = surface === 1 ? 0.74 : 1;
+            if (ring === 0) shade *= 0.68;
+            if (torn) {
+              col[vi * 3] = 0.42 * shade;
+              col[vi * 3 + 1] = 0.24 * shade;
+              col[vi * 3 + 2] = 0.2 * shade;
+            } else {
+              col[vi * 3] = shade;
+              col[vi * 3 + 1] = shade;
+              col[vi * 3 + 2] = shade;
+            }
           }
         }
       }
@@ -132,12 +169,27 @@ export class ClayMesh {
     position.needsUpdate = true;
     normal.needsUpdate = true;
     uv.needsUpdate = true;
-    color.needsUpdate = true;
-    const height = grid.y[rings - 1] ?? 0.1;
+    if (writeColor) color.needsUpdate = true;
+    const height = grid.y[grid.rings - 1] ?? 0.1;
     this.sphere.center.set(0, height * 0.45, 0);
     this.sphere.radius = Math.max(0.15, height, maxRadius) * 1.35;
     this.geometry.boundingSphere = this.sphere;
   }
+}
+
+function dynamicAttr(length: number, itemSize: number): Float32BufferAttribute {
+  const attribute = new Float32BufferAttribute(new Float32Array(length), itemSize);
+  attribute.setUsage(DynamicDrawUsage);
+  return attribute;
+}
+
+function hashTorn(torn: Uint8Array): number {
+  let hash = 2166136261;
+  for (let i = 0; i < torn.length; i++) {
+    hash ^= torn[i];
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
 }
 
 function buildIndices(rings: number, segments: number): Uint32Array {

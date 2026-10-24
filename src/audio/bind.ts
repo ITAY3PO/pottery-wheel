@@ -209,7 +209,7 @@ const MUTE_CSS = `
   color: #f7f1e8;
   font-family: Outfit, "Avenir Next", "Segoe UI", sans-serif;
   font-size: 14px;
-  font-weight: 640;
+  font-weight: 600;
   letter-spacing: 0.01em;
   touch-action: manipulation;
 }

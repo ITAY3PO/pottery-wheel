@@ -10,7 +10,7 @@ import {
   type GalleryEntry,
   type GallerySaveResult,
 } from './store';
-import { createTurntable, type Turntable } from './view';
+import type { Turntable } from './view';
 
 const STAGE_LABEL: Record<StageId, string> = {
   wet: 'Wet',
@@ -73,6 +73,7 @@ export function mountGallery(options: { root: HTMLElement; currentPiece: () => P
   let fromHash = false;
   let returnToBrowse = false;
   let turntable: Turntable | null = null;
+  let turntableTask: Promise<void> | null = null;
 
   const observer = new ResizeObserver(() => turntable?.resize());
   observer.observe(layer);
@@ -144,13 +145,24 @@ export function mountGallery(options: { root: HTMLElement; currentPiece: () => P
     reveal();
   }
 
+  function ensureTurntable(): void {
+    if (turntable || turntableTask) return;
+    turntableTask = import('./view').then(({ createTurntable }) => {
+      turntableTask = null;
+      if (layer.hidden) return;
+      turntable = createTurntable(canvas);
+      render();
+      present();
+    });
+  }
+
   function reveal(): void {
     const opening = layer.hidden;
     layer.hidden = false;
     entry.hidden = true;
     setBackgroundHidden(true);
-    if (!turntable) turntable = createTurntable(canvas);
     render();
+    ensureTurntable();
     present();
     if (opening) {
       const target = body.querySelector('button') ?? closeButton;
