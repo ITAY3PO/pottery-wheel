@@ -11,6 +11,7 @@ import { Vector3 } from 'three';
 import { Studio } from './render/studio';
 import { Shell, type ShellModel } from './ui/shell/shell';
 import { Wheel } from './core/wheel';
+import { installAudio } from './audio';
 
 const app = document.querySelector('#app');
 if (!(app instanceof HTMLElement)) throw new Error('Missing #app');
@@ -106,6 +107,12 @@ window.addEventListener('resize', () => resize());
 new ResizeObserver(() => resize()).observe(app);
 resize();
 publish();
+installAudio({
+  wheel,
+  getPiece: () => piece,
+  getPointer: () => (toolDown && previous ? previous : null),
+  getTool: () => activeToolId,
+});
 requestAnimationFrame(frame);
 
 canvas.addEventListener('contextmenu', (event) => event.preventDefault());
