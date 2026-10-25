@@ -1,4 +1,5 @@
 import { CLAY_TYPES, type ClayType } from '../../clay/clays';
+import { HANDS, handContact, isHandMode, type HandMode } from '../../clay/hand';
 import type { ClayTypeId } from '../../core/types';
 import type { QualityLevel, QualityMode } from '../../render/quality';
 
@@ -32,6 +33,9 @@ export interface ShellModel {
   centered: number | null;
   actions: ShellAction[];
   confirmDiscard: boolean;
+  /** Wet throwing. Hidden once the piece leaves the wheel or dries. */
+  showHands: boolean;
+  activeHand: HandMode;
 }
 
 export interface ShellHandlers {
@@ -43,6 +47,7 @@ export interface ShellHandlers {
   onStop: () => void;
   onSpeed: (value: number) => void;
   onTool: (id: string) => void;
+  onHand: (id: HandMode) => void;
   onAction: (id: string) => void;
   onDiscard: () => void;
   onConfirmDiscard: () => void;
@@ -155,6 +160,8 @@ export class Shell {
       tools: model.tools.map((tool) => tool.id),
       active: model.activeToolId,
       showWheel: model.showWheel,
+      showHands: model.showHands,
+      hand: model.activeHand,
       running: model.running,
       actions: model.actions.map((action) => [action.id, action.label]),
       confirm: model.confirmDiscard,
@@ -252,8 +259,10 @@ export class Shell {
       model.centered == null
         ? ''
         : `<div class="meter" aria-hidden="true"><span data-meter style="width:${Math.round(model.centered * 100)}%"></span></div>`;
+    const hands = model.showHands ? handPicker(model.activeHand) : '';
     this.sheet.innerHTML = `
       <h2>${escapeHtml(model.title)}</h2>
+      ${hands}
       ${meter}
       ${wheel}
       ${tools ? `<div class="tools">${tools}</div>` : ''}
@@ -277,6 +286,12 @@ export class Shell {
     speed?.addEventListener('input', () => this.handlers.onSpeed(Number(speed.value)));
     this.sheet.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach((button) => {
       button.addEventListener('click', () => this.handlers.onTool(button.dataset.tool || ''));
+    });
+    this.sheet.querySelectorAll<HTMLButtonElement>('[data-hand]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const id = button.dataset.hand || '';
+        if (isHandMode(id)) this.handlers.onHand(id);
+      });
     });
     this.actionButtons = [];
     this.sheet.querySelectorAll<HTMLButtonElement>('[data-action]').forEach((button) => {
@@ -382,6 +397,29 @@ export class Shell {
       button.setAttribute('aria-pressed', button.dataset.mode === this.quality.mode ? 'true' : 'false');
     });
   }
+}
+
+function handPicker(active: HandMode): string {
+  const contact = handContact(active);
+  const buttons = HANDS.map((hand) => {
+    const pressed = hand.id === active;
+    return `<button class="hand" type="button" data-hand="${hand.id}" aria-pressed="${pressed ? 'true' : 'false'}">${handIcon(hand.id)}<span>${hand.label}</span></button>`;
+  }).join('');
+  return `
+    <div class="field hand-field"><span>Hand</span><b>${escapeHtml(contact.label)}</b></div>
+    <div class="hands" role="group" aria-label="Hand">${buttons}</div>
+    <p class="hand-note">${escapeHtml(contact.note)}</p>
+  `;
+}
+
+function handIcon(id: HandMode): string {
+  if (id === 'fingertip') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10.15 6.1a1.85 1.85 0 0 1 3.7 0v12.1a1.85 1.85 0 0 1-3.7 0V6.1z"/></svg>';
+  }
+  if (id === 'palm') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4.2 13.1c0-1.15.72-2.12 1.74-2.5V8.7c0-.98.8-1.78 1.78-1.78s1.78.8 1.78 1.78v.55h.28V7.45c0-.98.8-1.78 1.78-1.78s1.78.8 1.78 1.78V9h.28v-.7c0-.98.8-1.78 1.78-1.78s1.78.8 1.78 1.78v2.45c.86.4 1.44 1.26 1.44 2.26v2.7c0 2.42-1.96 4.4-4.4 4.4H8.5c-2.38 0-4.3-1.92-4.3-4.3v-2.7z"/></svg>';
+  }
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7.2 6.9c2.15-1.05 5.05-1.15 7.35-.15 1.55.67 2.45 2.05 2.2 3.65l-1.35 8.05c-.22 1.32-1.42 2.28-2.76 2.2l-4.7-.42c-1.42-.12-2.55-1.28-2.66-2.7l-.62-7.35c-.12-1.48.78-2.55 2.54-3.28z"/></svg>';
 }
 
 function clayCard(clay: ClayType, selected: boolean): string {

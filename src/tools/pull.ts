@@ -1,4 +1,5 @@
 import { getClay } from '../clay/clays';
+import { currentHand } from '../clay/hand';
 import { pullUp, type Stroke } from '../clay/shape';
 import type { Tool, ToolContext } from '../core/types';
 
@@ -8,6 +9,7 @@ function strokeOf(ctx: ToolContext): Stroke {
     omega: ctx.wheel.omega,
     segment: ctx.pointer.segment,
     dt: ctx.dt,
+    hand: currentHand(),
   };
 }
 
