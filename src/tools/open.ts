@@ -1,5 +1,6 @@
 import { getClay } from '../clay/clays';
 import { meanChannel, ringAtHeight } from '../clay/grid';
+import { currentHand } from '../clay/hand';
 import { openCenter, type Stroke } from '../clay/shape';
 import type { Tool, ToolContext } from '../core/types';
 
@@ -9,6 +10,7 @@ function strokeOf(ctx: ToolContext): Stroke {
     omega: ctx.wheel.omega,
     segment: ctx.pointer.segment,
     dt: ctx.dt,
+    hand: currentHand(),
   };
 }
 

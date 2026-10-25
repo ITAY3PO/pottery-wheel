@@ -1,6 +1,7 @@
 import './core/listeners';
 import { getClay } from './clay/clays';
 import { centeredness, pieceHeight, profileExtent, segmentAtWorldAngle, silhouette } from './clay/grid';
+import { contactFootprint, currentHand, isHandMode, setHandMode, toolUsesHand } from './clay/hand';
 import { evaluateIntegrity } from './clay/integrity';
 import { events } from './core/events';
 import { SIM_STEP, stepFrameClock } from './core/frameClock';
@@ -116,6 +117,11 @@ const shell = new Shell(app, {
     if (id !== activeToolId && toolDown) endStroke();
     activeToolId = id;
     wireWarned = false;
+    publish();
+  },
+  onHand: (id) => {
+    if (!isHandMode(id) || id === currentHand()) return;
+    setHandMode(id);
     publish();
   },
   onAction: (id) => {
@@ -411,7 +417,17 @@ function updateCursor(): void {
   const nudge = toolId === 'water' ? 0.018 : 0.014;
   const x = signed * Math.cos(az) + Math.sin(az) * nudge;
   const z = -signed * Math.sin(az) + Math.cos(az) * nudge;
-  studio.showContact(true, x, sample.height + studio.clayPivot.position.y, sample.pressure, toolId, z, sample.side);
+  const footprint = toolUsesHand(toolId) ? contactFootprint(currentHand(), sample.pressure) : undefined;
+  studio.showContact(
+    true,
+    x,
+    sample.height + studio.clayPivot.position.y,
+    sample.pressure,
+    toolId,
+    z,
+    sample.side,
+    footprint,
+  );
   studio.showWire(false, 0, 0);
 }
 
@@ -632,6 +648,8 @@ function model(): ShellModel {
       centered: null,
       actions: [],
       confirmDiscard: false,
+      showHands: false,
+      activeHand: currentHand(),
     };
   }
   const stage = currentStage();
@@ -662,6 +680,8 @@ function model(): ShellModel {
       enabled: action.enabled ? action.enabled({ piece: piece as PieceState, wheel }) : true,
     })),
     confirmDiscard,
+    showHands: piece.stage === 'wet' && piece.onWheel,
+    activeHand: currentHand(),
   };
 }
 

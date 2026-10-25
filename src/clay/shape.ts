@@ -1,5 +1,13 @@
 import type { ClayType } from './clays';
 import { minWallThickness } from './clays';
+import {
+  handContact,
+  handFalloff,
+  isHandMode,
+  type HandContact,
+  type HandFalloff,
+  type HandMode,
+} from './hand';
 import { deformRateScale } from './wetness';
 import {
   clayIndex,
@@ -17,6 +25,7 @@ import {
   touchGrid,
   volume,
   volumeBetween,
+  wrapIndex,
 } from './grid';
 import type { ClayGrid } from '../core/types';
 
@@ -25,6 +34,11 @@ export interface Stroke {
   omega: number;
   segment: number;
   dt: number;
+  /**
+   * Which part of the hand is on the clay. Omitted keeps the legacy contact
+   * so a stroke that is not a bare hand is unchanged.
+   */
+  hand?: HandMode;
 }
 
 function spinAmount(omega: number): number {
@@ -36,13 +50,55 @@ function spinning(stroke: Stroke): boolean {
   return Math.abs(stroke.omega) >= 2.2;
 }
 
-/** Spinning strokes hit the whole ring. A still finger only hits a thumb-sized arc. */
+function strokeHand(stroke: Stroke): HandContact | null {
+  return stroke.hand && isHandMode(stroke.hand) ? handContact(stroke.hand) : null;
+}
+
+function ringSpacing(grid: ClayGrid, ring: number): number {
+  const prev = ring > 0 ? grid.y[ring] - grid.y[ring - 1] : 0;
+  const next = ring + 1 < grid.rings ? grid.y[ring + 1] - grid.y[ring] : 0;
+  const spacing = prev > 0 && next > 0 ? (prev + next) * 0.5 : prev || next;
+  return Math.max(0.0003, spacing);
+}
+
+/** Half-width of a hand, in rings, from the local spacing. At least one ring. */
+function bandsFor(grid: ClayGrid, ring: number, halfWidth: number): number {
+  return Math.max(1, Math.round(halfWidth / ringSpacing(grid, ring)));
+}
+
+/**
+ * Spinning strokes hit the whole ring. A still hand only hits its own arc:
+ * a fingertip is a few segments, a palm wraps a wide pad. Below the
+ * axisymmetric threshold a slow wheel also smears that arc along the spin.
+ */
 function withHand(grid: ClayGrid, stroke: Stroke, fn: (segment: number, weight: number) => void): void {
   if (spinning(stroke)) {
     for (let segment = 0; segment < grid.segments; segment++) fn(segment, 1);
     return;
   }
-  eachContacted(grid.segments, stroke.segment, 0, stroke.dt, fn);
+  const hand = strokeHand(stroke);
+  if (!hand) {
+    eachContacted(grid.segments, stroke.segment, 0, stroke.dt, fn);
+    return;
+  }
+  const segments = grid.segments;
+  const half = Math.max(1, Math.round(segments * hand.halfArc));
+  const speed = Math.abs(stroke.omega);
+  const swept =
+    speed < 0.45
+      ? 0
+      : Math.min(segments, Math.ceil((speed * Math.max(stroke.dt, 1 / 120)) / (Math.PI * 2) * segments));
+  const dir = stroke.omega >= 0 ? 1 : -1;
+  const start = dir > 0 ? -half : -(half + swept);
+  const end = dir > 0 ? half + swept : half;
+  for (let k = start; k <= end; k++) {
+    const off = Math.abs(k);
+    const distance =
+      off <= half ? off / (half + 0.001) : Math.min(1, 0.4 + (0.6 * (off - half)) / (swept + 0.001));
+    const weight = handFalloff(hand.falloff, distance);
+    if (weight <= 0.02) continue;
+    fn(wrapIndex(stroke.segment + k, segments), weight);
+  }
 }
 
 function framePush(stroke: Stroke, handSpeed: number, stress = 0): number {
@@ -57,10 +113,11 @@ function frameBlend(stroke: Stroke, ratePerSecond: number, stress = 0): number {
   return clamp(1 - Math.exp(-rate * stroke.dt * Math.max(0.2, stroke.pressure)), 0, 0.65);
 }
 
-function falloffAt(ring: number, center: number, band: number): number {
+function falloffAt(ring: number, center: number, band: number, kind?: HandFalloff): number {
   const d = Math.abs(ring - center) / (band + 0.25);
   if (d >= 1) return 0;
-  return Math.cos(d * Math.PI * 0.5);
+  if (!kind) return Math.cos(d * Math.PI * 0.5);
+  return handFalloff(kind, d);
 }
 
 /**
@@ -93,20 +150,28 @@ function openWeight(axial: number): number {
 export function centerClay(grid: ClayGrid, height: number, stroke: Stroke, clay: ClayType): void {
   const target = volume(grid);
   const ring = ringAtHeight(grid, height);
-  // A spinning hand has been all the way around, and centering is a whole-lump
-  // gesture: every ring trends round, strongest under the fingers.
+  const hand = strokeHand(stroke);
+  // A spinning palm has been all the way around: every ring trends round.
+  // A fingertip stays local, even on a fast wheel, so it can groove a rim
+  // without recentering the foot.
   const round = spinning(stroke);
-  const band = round ? grid.rings : Math.max(3, Math.round(grid.rings * 0.07));
+  const whole = round && (!hand || hand.centerWhole);
+  const band = whole
+    ? grid.rings
+    : hand
+      ? bandsFor(grid, ring, hand.halfWidth)
+      : Math.max(3, Math.round(grid.rings * 0.07));
   const minW = minWallThickness(clay);
-  const blend = frameBlend(stroke, round ? 4.4 : 3.1, grid.stress);
-  const inward = framePush(stroke, round ? 0.016 : 0.02, grid.stress);
+  const centerScale = hand?.center ?? 1;
+  const blend = frameBlend(stroke, (whole ? 4.4 : 3.1) * centerScale, grid.stress);
+  const inward = framePush(stroke, (whole ? 0.016 : 0.02) * centerScale, grid.stress);
   if (blend <= 0 && inward <= 0) return;
 
-  const influence = round ? Math.max(6, Math.round(grid.rings * 0.22)) : band;
+  const influence = whole ? Math.max(6, Math.round(grid.rings * (hand?.falloff === 'smooth' ? 0.32 : 0.22))) : band;
   for (let r = ring - band; r <= ring + band; r++) {
     if (r < 0 || r >= grid.rings) continue;
-    const shaped = falloffAt(r, ring, influence);
-    const fall = round ? 0.62 + 0.38 * shaped : shaped;
+    const shaped = falloffAt(r, ring, influence, whole ? undefined : hand?.falloff);
+    const fall = whole ? (hand?.falloff === 'smooth' ? 0.74 + 0.26 * shaped : 0.62 + 0.38 * shaped) : shaped;
     if (fall <= 0) continue;
     const mean = meanChannel(grid.outer, r, grid.segments);
     const meanInner = meanChannel(grid.inner, r, grid.segments);
@@ -130,14 +195,15 @@ export function centerClay(grid: ClayGrid, height: number, stroke: Stroke, clay:
 export function pressIn(grid: ClayGrid, height: number, stroke: Stroke, clay: ClayType): void {
   const target = volume(grid);
   const ring = ringAtHeight(grid, height);
-  const band = Math.max(3, Math.round(grid.rings * 0.055));
+  const hand = strokeHand(stroke);
+  const band = hand ? bandsFor(grid, ring, hand.halfWidth) : Math.max(3, Math.round(grid.rings * 0.055));
   const minW = minWallThickness(clay) * 0.78;
-  const disp = framePush(stroke, 0.045, grid.stress);
+  const disp = framePush(stroke, 0.045 * (hand?.press ?? 1), grid.stress);
   if (disp <= 0) return;
 
   for (let r = ring - band; r <= ring + band; r++) {
     if (r < 0 || r >= grid.rings) continue;
-    const fall = falloffAt(r, ring, band);
+    const fall = falloffAt(r, ring, band, hand?.falloff);
     if (fall <= 0) continue;
     withHand(grid, stroke, (segment, weight) => {
       const i = clayIndex(r, segment, grid.segments);
@@ -147,9 +213,11 @@ export function pressIn(grid: ClayGrid, height: number, stroke: Stroke, clay: Cl
       if (inner > 0.002) grid.inner[i] = Math.max(0, inner - delta * 0.84);
     });
   }
-  // 0.16 at 60 fps. Scaled by dt so a 30 fps step matches two 60 fps steps.
-  const smooth = 1 - Math.exp(-10.4638 * Math.max(stroke.dt, 0));
-  smoothVertical(grid.outer, grid.rings, grid.segments, ring - band, ring + band, smooth);
+  // Legacy is 0.16 at 60 fps. A palm smooths harder so the edge never dents.
+  const smoothRate = hand?.smooth ?? 10.4638;
+  const smooth = 1 - Math.exp(-smoothRate * Math.max(stroke.dt, 0));
+  const pad = hand?.falloff === 'smooth' ? Math.max(1, Math.round(band * 0.2)) : 0;
+  smoothVertical(grid.outer, grid.rings, grid.segments, ring - band - pad, ring + band + pad, smooth);
   sanitizeGrid(grid);
   conserveByHeight(grid, Math.max(0, ring - band), target);
   touchGrid(grid);
@@ -217,8 +285,13 @@ export function openCenter(
 
   const midRing = ringAtHeight(grid, (floor + top) * 0.5);
   const meanOuter = Math.max(0.01, meanChannel(grid.outer, midRing, grid.segments));
-  const desired = clamp(Math.max(openingRadius, 0.012 * stroke.pressure), 0.008, meanOuter * 0.86);
-  const blend = frameBlend(stroke, 3.4, grid.stress);
+  const hand = strokeHand(stroke);
+  const desired = clamp(
+    Math.max(openingRadius + (hand?.openSpread ?? 0), 0.012 * stroke.pressure),
+    0.008,
+    meanOuter * (hand?.id === 'palm' ? 0.74 : 0.86),
+  );
+  const blend = frameBlend(stroke, 3.4 * (hand?.open ?? 1), grid.stress);
   if (blend <= 0) return;
   const minW = minWallThickness(clay) * 0.7;
 
@@ -318,20 +391,26 @@ function openDown(grid: ClayGrid, hitRadius: number, stroke: Stroke, clay: ClayT
     floorRing + Math.max(2, Math.round((grid.rings - floorRing) * 0.45)),
   );
   const meanOuter = Math.max(0.012, meanChannel(grid.outer, sampleRing, grid.segments));
-  const blend = frameBlend(stroke, 3.8, grid.stress);
+  const hand = strokeHand(stroke);
+  const blend = frameBlend(stroke, 3.8 * (hand?.open ?? 1), grid.stress);
   if (blend <= 0) return;
 
   const above = top0 - grid.y[floorRing];
   const minHeight = Math.max(0.03, meanOuter * 1.05);
   if (above > 0.012 && totalH > minHeight) {
-    const drop = Math.min(above * 0.15, Math.max(0, totalH - minHeight), framePush(stroke, 0.018, grid.stress));
+    const drop = Math.min(
+      above * 0.15,
+      Math.max(0, totalH - minHeight),
+      framePush(stroke, 0.018 * (hand?.id === 'fingertip' ? 1.25 : hand?.id === 'palm' ? 0.7 : 1), grid.stress),
+    );
     if (drop > 0) scaleGaps(grid, floorRing, clamp((above - drop) / above, 0.9, 1));
   }
 
   const floor = grid.y[floorRing];
   const top = grid.y[grid.rings - 1];
-  const reach = meanOuter * (0.2 + 0.5 * clamp(stroke.pressure, 0, 1));
-  const desired = clamp(Math.max(hitRadius, reach), 0.006, meanOuter * 0.78);
+  const reachScale = hand?.id === 'palm' ? 1.22 : hand?.id === 'fingertip' ? 0.72 : 1;
+  const reach = meanOuter * (0.2 + 0.5 * clamp(stroke.pressure, 0, 1)) * reachScale;
+  const desired = clamp(Math.max(hitRadius + (hand?.openSpread ?? 0), reach), 0.006, meanOuter * (hand?.id === 'palm' ? 0.7 : 0.78));
   const minW = Math.max(0.0012, minWallThickness(clay) * 0.7);
   for (let r = floorRing; r < grid.rings; r++) {
     const taper = openTaper(grid.y[r], floor, top);
@@ -379,19 +458,24 @@ export function pullUp(
   if (dragUp <= 0.00002 || stroke.pressure <= 0.02) return;
   const target = volume(grid);
   const ring = ringAtHeight(grid, height);
+  const hand = strokeHand(stroke);
   const spin = spinAmount(stroke.omega);
-  const grow = dragUp * (0.22 + 0.98 * spin) * (0.4 + 0.75 * stroke.pressure);
-  const anchor = Math.max(1, ring - 4);
+  const grow = dragUp * (0.22 + 0.98 * spin) * (0.4 + 0.75 * stroke.pressure) * (hand?.lift ?? 1);
+  // A knuckle's wider contact lifts from lower on the wall. A fingertip
+  // only stretches the clay it is actually on.
+  const anchor = hand
+    ? Math.max(1, ring - Math.max(2, bandsFor(grid, ring, hand.halfWidth)))
+    : Math.max(1, ring - 4);
   addHeight(grid, anchor, grow);
 
   if (spin > 0.35) {
     thinToVolume(grid, anchor, target, minWallThickness(clay) * 0.62);
   } else {
-    const band = Math.max(2, Math.round(grid.rings * 0.035));
-    const shave = dragUp * (0.35 + stroke.pressure) * 0.55;
+    const band = hand ? bandsFor(grid, ring, hand.halfWidth) : Math.max(2, Math.round(grid.rings * 0.035));
+    const shave = dragUp * (0.35 + stroke.pressure) * 0.55 * (hand?.press ?? 1);
     for (let r = ring - band; r <= ring + 1; r++) {
       if (r < 0 || r >= grid.rings) continue;
-      const fall = falloffAt(r, ring, band);
+      const fall = falloffAt(r, ring, band, hand?.falloff);
       withHand(grid, stroke, (segment, weight) => {
         const i = clayIndex(r, segment, grid.segments);
         const inner = grid.inner[i];
@@ -427,10 +511,14 @@ export function compressClay(
   if (dragDown <= 0.00002 || stroke.pressure <= 0.02) return;
   const target = volume(grid);
   const ring = ringAtHeight(grid, Math.max(height, grid.y[0] + pieceHeight(grid) * 0.45));
+  const hand = strokeHand(stroke);
   const spin = spinAmount(stroke.omega);
   const available = grid.y[grid.rings - 1] - grid.y[ring];
   if (available < 0.008) return;
-  const remove = Math.min(available * 0.42, dragDown * (0.35 + 0.9 * spin) * (0.45 + 0.7 * stroke.pressure));
+  const remove = Math.min(
+    available * 0.42,
+    dragDown * (0.35 + 0.9 * spin) * (0.45 + 0.7 * stroke.pressure) * (hand?.squash ?? 1),
+  );
   const factor = clamp((available - remove) / available, 0.58, 1);
   const gaps: number[] = [];
   for (let r = ring; r < grid.rings - 1; r++) gaps.push(grid.y[r + 1] - grid.y[r]);

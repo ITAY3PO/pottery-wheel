@@ -298,6 +298,7 @@ export class Studio {
     toolId = '',
     z?: number,
     side?: 1 | -1,
+    footprint?: { x: number; y: number; z: number },
   ): void {
     this.contact.visible = false;
     for (const mesh of this.toolContacts.values()) mesh.visible = false;
@@ -312,7 +313,9 @@ export class Studio {
     mesh.position.set(x, yPos, zPos);
     const pressed = 0.75 + Math.max(0, Math.min(1, pressure)) * 1.15;
     const dir = side ?? (x >= 0 ? 1 : -1);
-    if (id === 'needle') mesh.scale.setScalar(1);
+    if (footprint && mesh === this.contact) {
+      mesh.scale.set(Math.max(0.2, footprint.x), Math.max(0.2, footprint.y), Math.max(0.2, footprint.z));
+    } else if (id === 'needle') mesh.scale.setScalar(1);
     else if (id === 'knife') mesh.scale.set(dir, 0.85 + pressure * 0.35, 0.85 + pressure * 0.35);
     else if (id === 'rib') mesh.scale.set(dir, 1, 1);
     else if (id === 'sponge') mesh.scale.setScalar(1.05 + pressure * 0.4);
